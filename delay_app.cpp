@@ -27,6 +27,7 @@ DelayApp::DelayApp() :
 	next_pot_index_(0),
 	smoothed_delay_ms_(450.0f),
 	last_pot_read_us_(0),
+	pot_active_until_us_(0),
 	freeze_pressed_(false),
 	clear_requested_(false),
 	ignore_next_tap_(false),
@@ -45,8 +46,8 @@ bool DelayApp::init() {
 
 	brain::ui::PotsConfig pot_cfg = brain::ui::create_default_config(3, 8);
 	pot_cfg.simple = false;
-	pot_cfg.samples_per_read = 4;
-	pot_cfg.settling_delay_us = 120;
+	pot_cfg.samples_per_read = 3;
+	pot_cfg.settling_delay_us = 100;
 	pot_cfg.change_threshold = 2;
 	pots_.init(pot_cfg);
 	for (uint8_t i = 0; i < kPotCount; i++) {
@@ -61,6 +62,7 @@ bool DelayApp::init() {
 	smoothed_delay_ms_ = map_time_pot_to_ms(stable_pot_values_[0]);
 	tap_pickup_pot_raw_ = pot_values_[0];
 	last_pot_read_us_ = time_us_32();
+	pot_active_until_us_ = last_pot_read_us_ + kPotActivityHoldUs;
 
 	button_tap_clear_.init(true);
 	button_freeze_.init(true);
@@ -203,11 +205,24 @@ void DelayApp::on_freeze_release() {
 
 void DelayApp::update_control_params() {
 	const uint32_t now_us = time_us_32();
-	if ((now_us - last_pot_read_us_) >= kPotReadIntervalUs) {
+	const int32_t active_remaining = static_cast<int32_t>(pot_active_until_us_ - now_us);
+	const bool pot_activity_active = (active_remaining > 0);
+	const uint32_t pot_read_interval =
+		pot_activity_active ? kPotReadIntervalActiveUs : kPotReadIntervalIdleUs;
+
+	if ((now_us - last_pot_read_us_) >= pot_read_interval) {
 		last_pot_read_us_ = now_us;
+		const uint8_t pot_index = next_pot_index_;
+		const uint16_t old_raw = pot_values_[pot_index];
 		engine_.set_control_adc_lock(true);
-		pot_values_[next_pot_index_] = pots_.get(next_pot_index_);
+		pot_values_[pot_index] = pots_.get(pot_index);
 		engine_.set_control_adc_lock(false);
+		const int32_t delta =
+			static_cast<int32_t>(pot_values_[pot_index]) - static_cast<int32_t>(old_raw);
+		const int32_t abs_delta = (delta < 0) ? -delta : delta;
+		if (abs_delta >= static_cast<int32_t>(kPotActivityDetectThreshold)) {
+			pot_active_until_us_ = now_us + kPotActivityHoldUs;
+		}
 		next_pot_index_ = static_cast<uint8_t>((next_pot_index_ + 1) % kPotCount);
 	}
 

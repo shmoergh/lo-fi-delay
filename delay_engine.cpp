@@ -81,6 +81,9 @@ DelayEngine::DelayEngine() :
 	control_lock_started_us_(0),
 	last_audio_adc_raw_(2048),
 	prev_input_raw_sample_(0),
+	lock_hold_sample_(0),
+	unlock_blend_remaining_(0),
+	was_control_locked_(false),
 	input_gate_open_(false),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
@@ -110,6 +113,9 @@ bool DelayEngine::init() {
 	control_lock_max_us_ = 0;
 	control_lock_started_us_ = 0;
 	prev_input_raw_sample_ = 0;
+	lock_hold_sample_ = 0;
+	unlock_blend_remaining_ = 0;
+	was_control_locked_ = false;
 	input_gate_open_ = false;
 	last_audio_adc_raw_ = 2048;
 
@@ -148,6 +154,9 @@ void DelayEngine::clear_and_restart() {
 	current_delay_q16_ = params_.delay_samples << 16;
 	tone_lp_q15_ = 0;
 	prev_input_raw_sample_ = 0;
+	lock_hold_sample_ = 0;
+	unlock_blend_remaining_ = 0;
+	was_control_locked_ = false;
 	input_gate_open_ = false;
 	last_audio_adc_raw_ = 2048;
 	start();
@@ -244,14 +253,32 @@ bool DelayEngine::process_audio_tick() {
 	delay_int = clamp_value<uint32_t>(delay_int, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 
+	const bool control_locked = control_adc_locked_;
+	if (was_control_locked_ && !control_locked) {
+		unlock_blend_remaining_ = kUnlockBlendSamples;
+	}
+	was_control_locked_ = control_locked;
+
 	uint16_t adc_raw = last_audio_adc_raw_;
-	if (!control_adc_locked_) {
+	if (!control_locked) {
 		adc_raw = audio_input_dma_.latest_raw_u12();
 		last_audio_adc_raw_ = adc_raw;
 	} else {
 		adc_stale_sample_count_++;
 	}
 	int16_t input_sample = adc_to_audio_sample(adc_raw);
+	if (control_locked) {
+		lock_hold_sample_ = input_sample;
+	} else if (unlock_blend_remaining_ > 0) {
+		const uint16_t blend_total = kUnlockBlendSamples;
+		const uint16_t progressed = blend_total - unlock_blend_remaining_;
+		const int32_t hold_part = static_cast<int32_t>(lock_hold_sample_) *
+			static_cast<int32_t>(blend_total - progressed);
+		const int32_t live_part =
+			static_cast<int32_t>(input_sample) * static_cast<int32_t>(progressed);
+		input_sample = clamp_i16((hold_part + live_part) / static_cast<int32_t>(blend_total));
+		unlock_blend_remaining_--;
+	}
 	if (kEnableInputAveraging) {
 		const int32_t averaged = (static_cast<int32_t>(input_sample) +
 								 static_cast<int32_t>(prev_input_raw_sample_)) /

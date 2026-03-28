@@ -20,7 +20,10 @@ class DelayApp {
 	private:
 	static const uint8_t kPotCount = 3;
 	static const uint32_t kControlIntervalUs = 20000;
-	static const uint32_t kPotReadIntervalUs = 90000;
+	static const uint32_t kPotReadIntervalActiveUs = 90000;
+	static const uint32_t kPotReadIntervalIdleUs = 300000;
+	static const uint32_t kPotActivityHoldUs = 1400000;
+	static const uint8_t kPotActivityDetectThreshold = 2;
 	static const uint32_t kDebugIntervalUs = 300000;
 	static const uint32_t kButtonLongPressMs = 700;
 	static const uint16_t kTapPickupThreshold = 64;
@@ -59,6 +62,7 @@ class DelayApp {
 	uint8_t next_pot_index_;
 	float smoothed_delay_ms_;
 	uint32_t last_pot_read_us_;
+	uint32_t pot_active_until_us_;
 
 	bool freeze_pressed_;
 	bool clear_requested_;
