@@ -1,9 +1,9 @@
 # DMA Migration Phase Todo
 
 ## Phase 0: Baseline Freeze (`v0.1-poc`)
-- [ ] Create branch `v0.1-poc` from current local state
-- [ ] Commit current PoC baseline
-- [ ] Push branch to `origin`
+- [x] Create branch `v0.1-poc` from current local state
+- [x] Commit current PoC baseline
+- [x] Push branch to `origin`
 - [ ] Record baseline listening notes (idle whine + pot movement behavior)
 
 ## Phase 1: Diagnostics Only (No Audio Architecture Change)
