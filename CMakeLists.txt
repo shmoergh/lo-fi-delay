@@ -24,17 +24,10 @@ add_subdirectory(brain-sdk)
 
 add_executable(lo-fi-delay
 	main.cpp
-	firmware/fast_dac_out.cpp
-	firmware/delay_engine.cpp
-	firmware/delay_app.cpp
 )
 
 target_link_libraries(lo-fi-delay
-	pico_stdlib
-	brain-common
-	brain-ui
-	brain-io
-  brain-utils)
+	pico_stdlib)
 
 pico_enable_stdio_usb(lo-fi-delay 1)
 pico_enable_stdio_uart(lo-fi-delay 1)

@@ -1,10 +1,11 @@
-#include "firmware/delay_app.h"
+#include <pico/stdlib.h>
 
 int main() {
-	firmware::DelayApp app;
-	if (!app.init()) {
-		return 1;
+	stdio_init_all();
+
+	while (true) {
+		tight_loop_contents();
 	}
-	app.run();
+
 	return 0;
 }
