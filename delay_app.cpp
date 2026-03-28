@@ -129,14 +129,20 @@ void DelayApp::run() {
 		if ((now_us - last_debug_us) >= kDebugIntervalUs) {
 			last_debug_us = now_us;
 			const DelayParams params = engine_.get_params();
+			const DelayStats stats = engine_.get_stats();
 			const float delay_ms = (static_cast<float>(params.delay_samples) * 1000.0f) /
 				engine_.sample_rate_hz();
 			const float fb =
 				static_cast<float>(params.feedback_q15) / static_cast<float>(DelayEngine::kQ15Max);
 			const float mix =
 				static_cast<float>(params.mix_q15) / static_cast<float>(DelayEngine::kQ15Max);
+			const uint32_t lock_avg_us = (stats.control_lock_events > 0)
+				? static_cast<uint32_t>(stats.control_lock_total_us / stats.control_lock_events)
+				: 0;
 
-			printf("delay=%.1fms fb=%.2f mix=%.2f p0=%u p1=%u p2=%u freeze=%d tap=%d overruns=%lu\n",
+			printf(
+				"delay=%.1fms fb=%.2f mix=%.2f p0=%u p1=%u p2=%u freeze=%d tap=%d over=%lu"
+				" ticks=%lu stale=%lu lock_ev=%lu lock_avg=%luus lock_max=%luus\n",
 				static_cast<double>(delay_ms),
 				static_cast<double>(fb),
 				static_cast<double>(mix),
@@ -145,7 +151,12 @@ void DelayApp::run() {
 				static_cast<unsigned>(stable_pot_values_[2]),
 				params.freeze ? 1 : 0,
 				tap_time_active_ ? 1 : 0,
-				static_cast<unsigned long>(engine_.get_overrun_count()));
+				static_cast<unsigned long>(stats.overrun_count),
+				static_cast<unsigned long>(stats.audio_tick_count),
+				static_cast<unsigned long>(stats.adc_stale_sample_count),
+				static_cast<unsigned long>(stats.control_lock_events),
+				static_cast<unsigned long>(lock_avg_us),
+				static_cast<unsigned long>(stats.control_lock_max_us));
 		}
 
 		sleep_us(200);

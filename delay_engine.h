@@ -16,6 +16,15 @@ struct DelayParams {
 	bool freeze;
 };
 
+struct DelayStats {
+	uint32_t audio_tick_count;
+	uint32_t adc_stale_sample_count;
+	uint32_t control_lock_events;
+	uint64_t control_lock_total_us;
+	uint32_t control_lock_max_us;
+	uint32_t overrun_count;
+};
+
 class DelayEngine {
 	public:
 	enum class AudioTestMode : uint8_t {
@@ -29,7 +38,7 @@ class DelayEngine {
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
 	static const uint32_t kDelaySlewQ16PerSample = (1u << 16);
-	static constexpr AudioTestMode kTestMode = AudioTestMode::kNormal;
+	static constexpr AudioTestMode kTestMode = AudioTestMode::kDacMidpoint;
 	static const bool kEnableInputAveraging = true;
 	static const bool kEnableInputNoiseGate = false;
 	static const int16_t kInputGateOpenThreshold = 360;
@@ -47,6 +56,7 @@ class DelayEngine {
 	void set_control_adc_lock(bool locked);
 
 	uint32_t get_overrun_count() const;
+	DelayStats get_stats() const;
 	float sample_rate_hz() const;
 
 	private:
@@ -62,6 +72,12 @@ class DelayEngine {
 	DelayParams params_;
 	volatile uint32_t isr_overrun_count_;
 	volatile bool control_adc_locked_;
+	volatile uint32_t audio_tick_count_;
+	volatile uint32_t adc_stale_sample_count_;
+	volatile uint32_t control_lock_events_;
+	volatile uint64_t control_lock_total_us_;
+	volatile uint32_t control_lock_max_us_;
+	volatile uint32_t control_lock_started_us_;
 	volatile uint16_t last_audio_adc_raw_;
 	bool audio_adc_needs_settle_;
 	int16_t prev_input_raw_sample_;

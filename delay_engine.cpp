@@ -59,6 +59,13 @@ int16_t adc_to_audio_sample(uint16_t adc_raw) {
 	return clamp_i16(scaled);
 }
 
+void mark_overrun_if_needed(volatile uint32_t& counter, uint32_t tick_start_us, uint32_t budget_us) {
+	const uint32_t elapsed_us = time_us_32() - tick_start_us;
+	if (elapsed_us > budget_us) {
+		counter++;
+	}
+}
+
 }  // namespace
 
 DelayEngine* DelayEngine::instance_ = nullptr;
@@ -67,6 +74,12 @@ DelayEngine::DelayEngine() :
 	running_(false),
 	isr_overrun_count_(0),
 	control_adc_locked_(false),
+	audio_tick_count_(0),
+	adc_stale_sample_count_(0),
+	control_lock_events_(0),
+	control_lock_total_us_(0),
+	control_lock_max_us_(0),
+	control_lock_started_us_(0),
 	last_audio_adc_raw_(2048),
 	audio_adc_needs_settle_(true),
 	prev_input_raw_sample_(0),
@@ -92,6 +105,12 @@ bool DelayEngine::init() {
 	current_delay_q16_ = params_.delay_samples << 16;
 	tone_lp_q15_ = 0;
 	isr_overrun_count_ = 0;
+	audio_tick_count_ = 0;
+	adc_stale_sample_count_ = 0;
+	control_lock_events_ = 0;
+	control_lock_total_us_ = 0;
+	control_lock_max_us_ = 0;
+	control_lock_started_us_ = 0;
 	audio_adc_needs_settle_ = true;
 	prev_input_raw_sample_ = 0;
 	input_gate_open_ = false;
@@ -133,6 +152,21 @@ void DelayEngine::set_params(const DelayParams& params) {
 
 void DelayEngine::set_control_adc_lock(bool locked) {
 	const uint32_t irq_state = save_and_disable_interrupts();
+
+	const uint32_t now_us = time_us_32();
+	if (locked) {
+		if (!control_adc_locked_) {
+			control_lock_started_us_ = now_us;
+		}
+	} else if (control_adc_locked_) {
+		const uint32_t held_us = now_us - control_lock_started_us_;
+		control_lock_events_++;
+		control_lock_total_us_ += held_us;
+		if (held_us > control_lock_max_us_) {
+			control_lock_max_us_ = held_us;
+		}
+	}
+
 	control_adc_locked_ = locked;
 	restore_interrupts(irq_state);
 }
@@ -148,6 +182,19 @@ uint32_t DelayEngine::get_overrun_count() const {
 	return isr_overrun_count_;
 }
 
+DelayStats DelayEngine::get_stats() const {
+	const uint32_t irq_state = save_and_disable_interrupts();
+	DelayStats stats{};
+	stats.audio_tick_count = audio_tick_count_;
+	stats.adc_stale_sample_count = adc_stale_sample_count_;
+	stats.control_lock_events = control_lock_events_;
+	stats.control_lock_total_us = control_lock_total_us_;
+	stats.control_lock_max_us = control_lock_max_us_;
+	stats.overrun_count = isr_overrun_count_;
+	restore_interrupts(irq_state);
+	return stats;
+}
+
 float DelayEngine::sample_rate_hz() const {
 	return 1000000.0f / static_cast<float>(kAudioPeriodUs);
 }
@@ -159,8 +206,12 @@ bool DelayEngine::timer_callback(repeating_timer* timer) {
 }
 
 bool DelayEngine::process_audio_tick() {
+	const uint32_t tick_start_us = time_us_32();
+	audio_tick_count_++;
+
 	if (kTestMode == AudioTestMode::kDacMidpoint) {
 		dac_.write_channel_a_raw(2048);
+		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
 		return true;
 	}
 
@@ -192,6 +243,7 @@ bool DelayEngine::process_audio_tick() {
 		adc_raw = adc_read();
 		last_audio_adc_raw_ = adc_raw;
 	} else {
+		adc_stale_sample_count_++;
 		audio_adc_needs_settle_ = true;
 	}
 	int16_t input_sample = adc_to_audio_sample(adc_raw);
@@ -219,6 +271,7 @@ bool DelayEngine::process_audio_tick() {
 
 	if (kTestMode == AudioTestMode::kDryPass) {
 		dac_.write_channel_a_raw(sample_to_dac_u12(input_sample));
+		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
 		return true;
 	}
 	const uint32_t read_index_a = (write_index_ + kMaxDelaySamples - delay_int) % kMaxDelaySamples;
@@ -263,6 +316,7 @@ bool DelayEngine::process_audio_tick() {
 	const int16_t output_sample = clamp_i16(dry_part + wet_part);
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
+	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
 
 	return true;
 }

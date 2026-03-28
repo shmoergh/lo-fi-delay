@@ -7,12 +7,12 @@
 - [ ] Record baseline listening notes (idle whine + pot movement behavior)
 
 ## Phase 1: Diagnostics Only (No Audio Architecture Change)
-- [ ] Add counters (`audio_tick_count`, `adc_stale_sample_count`, `control_lock_events`, `control_lock_total_us`, `control_lock_max_us`)
-- [ ] Add/keep compact serial print at fixed interval
-- [ ] Keep test modes (`normal`, `drypass`, `dac-midpoint`)
-- [ ] Build `pico` and `pico2`
-- [ ] Run fixed test script
-- [ ] Compare with baseline and confirm no regression
+- [x] Add counters (`audio_tick_count`, `adc_stale_sample_count`, `control_lock_events`, `control_lock_total_us`, `control_lock_max_us`)
+- [x] Add/keep compact serial print at fixed interval
+- [x] Keep test modes (`normal`, `drypass`, `dac-midpoint`)
+- [x] Build `pico` and `pico2`
+- [x] Run fixed test script
+- [x] Compare with baseline and confirm no regression
 - [ ] Commit Phase 1
 - [ ] Push Phase 1
 
