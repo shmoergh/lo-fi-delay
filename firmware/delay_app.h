@@ -19,7 +19,7 @@ class DelayApp {
 
 	private:
 	static const uint8_t kPotCount = 3;
-	static const uint32_t kControlIntervalUs = 10000;
+	static const uint32_t kControlIntervalUs = 20000;
 	static const uint32_t kDebugIntervalUs = 300000;
 	static const uint32_t kButtonLongPressMs = 700;
 	static const uint16_t kTapPickupThreshold = 64;
@@ -27,7 +27,7 @@ class DelayApp {
 	static const bool kEnableTapTempo = false;
 	static const uint16_t kPotMaxRaw = 255;
 	static constexpr float kMinDelayMs = 30.0f;
-	static constexpr float kMaxDelayMs = 4000.0f;
+	static constexpr float kMaxDelayMs = 1000.0f;
 
 	static const uint8_t kPotDeadbandTime = 2;
 	static const uint8_t kPotDeadbandFeedback = 1;
@@ -40,7 +40,6 @@ class DelayApp {
 	void on_freeze_release();
 
 	void update_control_params();
-	uint16_t read_pot_atomic(uint8_t index);
 	float map_time_pot_to_ms(uint16_t raw) const;
 	uint16_t delay_ms_to_pot_raw(float delay_ms) const;
 	int16_t to_q15(float norm01) const;

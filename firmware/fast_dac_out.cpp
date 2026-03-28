@@ -19,7 +19,7 @@ T clamp_value(T v, T lo, T hi) {
 }  // namespace
 
 bool FastDacOut::init() {
-	spi_init(spi0, 1000000);
+	spi_init(spi0, kSpiFrequencyHz);
 	spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
 
 	gpio_set_function(GPIO_BRAIN_AUDIO_CV_OUT_SCK, GPIO_FUNC_SPI);
@@ -48,9 +48,13 @@ void FastDacOut::write_channel_a_raw(uint16_t raw12) {
 	data[0] = static_cast<uint8_t>((kConfig << 4) | ((raw12 >> 8) & 0x0F));
 	data[1] = static_cast<uint8_t>(raw12 & 0xFF);
 
+	asm volatile("nop \n nop \n nop");
 	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_CS, 0);
+	asm volatile("nop \n nop \n nop");
 	spi_write_blocking(spi0, data, 2);
+	asm volatile("nop \n nop \n nop");
 	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_CS, 1);
+	asm volatile("nop \n nop \n nop");
 }
 
 }  // namespace firmware

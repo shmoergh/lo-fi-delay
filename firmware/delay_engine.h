@@ -18,11 +18,22 @@ struct DelayParams {
 
 class DelayEngine {
 	public:
+	enum class AudioTestMode : uint8_t {
+		kNormal = 0,
+		kDacMidpoint = 1,
+		kDryPass = 2
+	};
+
 	static const int kAudioPeriodUs = 42;
-	static const uint32_t kMaxDelaySamples = 96000;
+	static const uint32_t kMaxDelaySamples = 24000;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
 	static const uint32_t kDelaySlewQ16PerSample = (1u << 16);
+	static constexpr AudioTestMode kTestMode = AudioTestMode::kNormal;
+	static const bool kEnableInputAveraging = true;
+	static const bool kEnableInputNoiseGate = false;
+	static const int16_t kInputGateOpenThreshold = 360;
+	static const int16_t kInputGateCloseThreshold = 220;
 
 	DelayEngine();
 
@@ -52,6 +63,9 @@ class DelayEngine {
 	volatile uint32_t isr_overrun_count_;
 	volatile bool control_adc_locked_;
 	volatile uint16_t last_audio_adc_raw_;
+	bool audio_adc_needs_settle_;
+	int16_t prev_input_raw_sample_;
+	bool input_gate_open_;
 
 	int16_t delay_buffer_[kMaxDelaySamples];
 	uint32_t write_index_;

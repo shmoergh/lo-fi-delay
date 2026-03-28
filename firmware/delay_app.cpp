@@ -1,6 +1,5 @@
 #include "delay_app.h"
 
-#include <hardware/sync.h>
 #include <pico/stdlib.h>
 
 #include <cmath>
@@ -50,7 +49,9 @@ bool DelayApp::init() {
 	pot_cfg.change_threshold = 0;
 	pots_.init(pot_cfg);
 	for (uint8_t i = 0; i < kPotCount; i++) {
-		pot_values_[i] = read_pot_atomic(i);
+		engine_.set_control_adc_lock(true);
+		pot_values_[i] = pots_.get(i);
+		engine_.set_control_adc_lock(false);
 	}
 
 	for (uint8_t i = 0; i < kPotCount; i++) {
@@ -82,6 +83,13 @@ bool DelayApp::init() {
 	printf("lo-fi-delay started (ISR @ ~%.1f Hz, max delay %lu samples)\n",
 		static_cast<double>(engine_.sample_rate_hz()),
 		static_cast<unsigned long>(DelayEngine::kMaxDelaySamples));
+	if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDacMidpoint) {
+		printf("audio test mode: DAC midpoint\n");
+	} else if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDryPass) {
+		printf("audio test mode: dry pass\n");
+	} else {
+		printf("audio test mode: normal\n");
+	}
 	return true;
 }
 
@@ -181,7 +189,9 @@ void DelayApp::on_freeze_release() {
 }
 
 void DelayApp::update_control_params() {
-	pot_values_[next_pot_index_] = read_pot_atomic(next_pot_index_);
+	engine_.set_control_adc_lock(true);
+	pot_values_[next_pot_index_] = pots_.get(next_pot_index_);
+	engine_.set_control_adc_lock(false);
 	next_pot_index_ = static_cast<uint8_t>((next_pot_index_ + 1) % kPotCount);
 
 	const auto apply_deadband = [](uint16_t incoming, uint16_t current, uint8_t deadband) -> uint16_t {
@@ -229,13 +239,6 @@ void DelayApp::update_control_params() {
 	params.tone_q15 = static_cast<int16_t>(0.22f * static_cast<float>(DelayEngine::kQ15Max));
 	params.freeze = freeze_pressed_;
 	engine_.set_params(params);
-}
-
-uint16_t DelayApp::read_pot_atomic(uint8_t index) {
-	const uint32_t irq_state = save_and_disable_interrupts();
-	const uint16_t value = pots_.get(index);
-	restore_interrupts(irq_state);
-	return value;
 }
 
 float DelayApp::map_time_pot_to_ms(uint16_t raw) const {
