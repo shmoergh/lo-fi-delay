@@ -80,6 +80,8 @@ DelayEngine::DelayEngine() :
 	control_lock_max_us_(0),
 	control_lock_started_us_(0),
 	last_audio_adc_raw_(2048),
+	dc_block_x_prev_(0),
+	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
 	lock_hold_sample_(0),
 	unlock_blend_remaining_(0),
@@ -112,6 +114,8 @@ bool DelayEngine::init() {
 	control_lock_total_us_ = 0;
 	control_lock_max_us_ = 0;
 	control_lock_started_us_ = 0;
+	dc_block_x_prev_ = 0;
+	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
 	lock_hold_sample_ = 0;
 	unlock_blend_remaining_ = 0;
@@ -153,6 +157,8 @@ void DelayEngine::clear_and_restart() {
 	write_index_ = 0;
 	current_delay_q16_ = params_.delay_samples << 16;
 	tone_lp_q15_ = 0;
+	dc_block_x_prev_ = 0;
+	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
 	lock_hold_sample_ = 0;
 	unlock_blend_remaining_ = 0;
@@ -278,6 +284,15 @@ bool DelayEngine::process_audio_tick() {
 			static_cast<int32_t>(input_sample) * static_cast<int32_t>(progressed);
 		input_sample = clamp_i16((hold_part + live_part) / static_cast<int32_t>(blend_total));
 		unlock_blend_remaining_--;
+	}
+	if (kEnableInputDcBlock) {
+		// 1-pole high-pass: y[n] = x[n] - x[n-1] + a * y[n-1]
+		const int32_t x = static_cast<int32_t>(input_sample);
+		const int32_t y = (x - static_cast<int32_t>(dc_block_x_prev_)) +
+			((static_cast<int32_t>(kDcBlockCoeffQ15) * dc_block_y_prev_) >> 15);
+		dc_block_x_prev_ = input_sample;
+		dc_block_y_prev_ = clamp_value<int32_t>(y, -32768, 32767);
+		input_sample = static_cast<int16_t>(dc_block_y_prev_);
 	}
 	if (kEnableInputAveraging) {
 		const int32_t averaged = (static_cast<int32_t>(input_sample) +

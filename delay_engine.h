@@ -42,6 +42,8 @@ class DelayEngine {
 	static const uint8_t kUnlockBlendSamples = 24;
 	static constexpr AudioTestMode kTestMode = AudioTestMode::kNormal;
 	static const bool kEnableInputAveraging = true;
+	static const bool kEnableInputDcBlock = true;
+	static const int16_t kDcBlockCoeffQ15 = 32604;	// ~0.995
 	static const bool kEnableInputNoiseGate = false;
 	static const int16_t kInputGateOpenThreshold = 360;
 	static const int16_t kInputGateCloseThreshold = 220;
@@ -81,6 +83,8 @@ class DelayEngine {
 	volatile uint32_t control_lock_max_us_;
 	volatile uint32_t control_lock_started_us_;
 	volatile uint16_t last_audio_adc_raw_;
+	int16_t dc_block_x_prev_;
+	int32_t dc_block_y_prev_;
 	int16_t prev_input_raw_sample_;
 	int16_t lock_hold_sample_;
 	uint8_t unlock_blend_remaining_;

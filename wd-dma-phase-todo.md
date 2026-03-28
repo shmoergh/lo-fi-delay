@@ -21,23 +21,23 @@
 - [x] Replace direct ISR ADC reads with DMA latest-sample path
 - [x] Keep one-pot-per-control-tick behavior
 - [x] Build `pico` and `pico2`
-- [ ] Run fixed test script
-- [ ] Confirm no pot-stability regression and no added distortion
-- [ ] Commit Phase 2
-- [ ] Push Phase 2
+- [x] Run fixed test script
+- [x] Confirm no pot-stability regression and no added distortion
+- [x] Commit Phase 2
+- [x] Push Phase 2
 
 ## Phase 3: DMA/Control Handoff Stabilization
-- [ ] Add deterministic post-resume settle/discard logic
-- [ ] Add input DC blocker (default enabled)
-- [ ] Keep averaging as optional A/B switch
-- [ ] Build `pico` and `pico2`
-- [ ] Run fixed test script
-- [ ] Confirm idle whine is same or improved (target: improved)
-- [ ] Commit Phase 3
-- [ ] Push Phase 3
+- [x] Add deterministic post-resume settle/discard logic
+- [x] Add input DC blocker (default enabled)
+- [x] Keep averaging as optional A/B switch
+- [x] Build `pico` and `pico2`
+- [x] Run fixed test script
+- [x] Confirm idle whine is same or improved (target: improved)
+- [x] Commit Phase 3
+- [x] Push Phase 3
 
 ## Phase 4: Optional DAC SPI DMA Output (Only if Needed)
-- [ ] Decide if Phase 4 is needed based on Phase 3 results
+- [x] Decide if Phase 4 is needed based on Phase 3 results
 - [ ] Add firmware-local `AudioOutputDmaSpi` class + integration
 - [ ] Keep A/B fallback path available during validation
 - [ ] Build `pico` and `pico2`
