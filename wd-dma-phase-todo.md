@@ -17,10 +17,10 @@
 - [x] Push Phase 1
 
 ## Phase 2: ADC DMA Input (`AudioInputDma`)
-- [ ] Add firmware-local `AudioInputDma` class + integration
-- [ ] Replace direct ISR ADC reads with DMA latest-sample path
-- [ ] Keep one-pot-per-control-tick behavior
-- [ ] Build `pico` and `pico2`
+- [x] Add firmware-local `AudioInputDma` class + integration
+- [x] Replace direct ISR ADC reads with DMA latest-sample path
+- [x] Keep one-pot-per-control-tick behavior
+- [x] Build `pico` and `pico2`
 - [ ] Run fixed test script
 - [ ] Confirm no pot-stability regression and no added distortion
 - [ ] Commit Phase 2

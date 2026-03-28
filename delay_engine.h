@@ -4,6 +4,7 @@
 
 #include <pico/time.h>
 
+#include "audio_input_dma.h"
 #include "fast_dac_out.h"
 
 namespace firmware {
@@ -37,8 +38,8 @@ class DelayEngine {
 	static const uint32_t kMaxDelaySamples = 24000;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
-	static const uint32_t kDelaySlewQ16PerSample = (1u << 16);
-	static constexpr AudioTestMode kTestMode = AudioTestMode::kDacMidpoint;
+	static const uint32_t kDelaySlewQ16PerSample = (1u << 14);
+	static constexpr AudioTestMode kTestMode = AudioTestMode::kNormal;
 	static const bool kEnableInputAveraging = true;
 	static const bool kEnableInputNoiseGate = false;
 	static const int16_t kInputGateOpenThreshold = 360;
@@ -79,10 +80,10 @@ class DelayEngine {
 	volatile uint32_t control_lock_max_us_;
 	volatile uint32_t control_lock_started_us_;
 	volatile uint16_t last_audio_adc_raw_;
-	bool audio_adc_needs_settle_;
 	int16_t prev_input_raw_sample_;
 	bool input_gate_open_;
 
+	AudioInputDma audio_input_dma_;
 	int16_t delay_buffer_[kMaxDelaySamples];
 	uint32_t write_index_;
 	uint32_t current_delay_q16_;

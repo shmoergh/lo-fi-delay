@@ -9,3 +9,4 @@ build-pico-2
 **/ai
 *.uf2
 .vscode/
+wd*.md

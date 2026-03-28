@@ -26,6 +26,7 @@ DelayApp::DelayApp() :
 	overrun_led_(BRAIN_LED_1, true),
 	next_pot_index_(0),
 	smoothed_delay_ms_(450.0f),
+	last_pot_read_us_(0),
 	freeze_pressed_(false),
 	clear_requested_(false),
 	ignore_next_tap_(false),
@@ -43,10 +44,10 @@ bool DelayApp::init() {
 	stdio_init_all();
 
 	brain::ui::PotsConfig pot_cfg = brain::ui::create_default_config(3, 8);
-	pot_cfg.simple = true;
-	pot_cfg.samples_per_read = 1;
-	pot_cfg.settling_delay_us = 50;
-	pot_cfg.change_threshold = 0;
+	pot_cfg.simple = false;
+	pot_cfg.samples_per_read = 4;
+	pot_cfg.settling_delay_us = 120;
+	pot_cfg.change_threshold = 2;
 	pots_.init(pot_cfg);
 	for (uint8_t i = 0; i < kPotCount; i++) {
 		engine_.set_control_adc_lock(true);
@@ -59,6 +60,7 @@ bool DelayApp::init() {
 	}
 	smoothed_delay_ms_ = map_time_pot_to_ms(stable_pot_values_[0]);
 	tap_pickup_pot_raw_ = pot_values_[0];
+	last_pot_read_us_ = time_us_32();
 
 	button_tap_clear_.init(true);
 	button_freeze_.init(true);
@@ -200,10 +202,14 @@ void DelayApp::on_freeze_release() {
 }
 
 void DelayApp::update_control_params() {
-	engine_.set_control_adc_lock(true);
-	pot_values_[next_pot_index_] = pots_.get(next_pot_index_);
-	engine_.set_control_adc_lock(false);
-	next_pot_index_ = static_cast<uint8_t>((next_pot_index_ + 1) % kPotCount);
+	const uint32_t now_us = time_us_32();
+	if ((now_us - last_pot_read_us_) >= kPotReadIntervalUs) {
+		last_pot_read_us_ = now_us;
+		engine_.set_control_adc_lock(true);
+		pot_values_[next_pot_index_] = pots_.get(next_pot_index_);
+		engine_.set_control_adc_lock(false);
+		next_pot_index_ = static_cast<uint8_t>((next_pot_index_ + 1) % kPotCount);
+	}
 
 	const auto apply_deadband = [](uint16_t incoming, uint16_t current, uint8_t deadband) -> uint16_t {
 		const int32_t delta = static_cast<int32_t>(incoming) - static_cast<int32_t>(current);

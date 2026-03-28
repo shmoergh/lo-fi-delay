@@ -1,6 +1,5 @@
 #include "delay_engine.h"
 
-#include <hardware/adc.h>
 #include <hardware/sync.h>
 #include <pico/time.h>
 
@@ -81,7 +80,6 @@ DelayEngine::DelayEngine() :
 	control_lock_max_us_(0),
 	control_lock_started_us_(0),
 	last_audio_adc_raw_(2048),
-	audio_adc_needs_settle_(true),
 	prev_input_raw_sample_(0),
 	input_gate_open_(false),
 	write_index_(0),
@@ -111,9 +109,13 @@ bool DelayEngine::init() {
 	control_lock_total_us_ = 0;
 	control_lock_max_us_ = 0;
 	control_lock_started_us_ = 0;
-	audio_adc_needs_settle_ = true;
 	prev_input_raw_sample_ = 0;
 	input_gate_open_ = false;
+	last_audio_adc_raw_ = 2048;
+
+	if (!audio_input_dma_.init(sample_rate_hz() * 6.0f)) {
+		return false;
+	}
 
 	instance_ = this;
 	return true;
@@ -121,7 +123,13 @@ bool DelayEngine::init() {
 
 bool DelayEngine::start() {
 	if (running_) return true;
+	if (!audio_input_dma_.start()) {
+		return false;
+	}
 	running_ = add_repeating_timer_us(-kAudioPeriodUs, DelayEngine::timer_callback, nullptr, &timer_);
+	if (!running_) {
+		audio_input_dma_.stop();
+	}
 	return running_;
 }
 
@@ -130,6 +138,7 @@ void DelayEngine::stop() {
 		cancel_repeating_timer(&timer_);
 		running_ = false;
 	}
+	audio_input_dma_.stop();
 }
 
 void DelayEngine::clear_and_restart() {
@@ -138,9 +147,9 @@ void DelayEngine::clear_and_restart() {
 	write_index_ = 0;
 	current_delay_q16_ = params_.delay_samples << 16;
 	tone_lp_q15_ = 0;
-	audio_adc_needs_settle_ = true;
 	prev_input_raw_sample_ = 0;
 	input_gate_open_ = false;
+	last_audio_adc_raw_ = 2048;
 	start();
 }
 
@@ -157,6 +166,7 @@ void DelayEngine::set_control_adc_lock(bool locked) {
 	if (locked) {
 		if (!control_adc_locked_) {
 			control_lock_started_us_ = now_us;
+			audio_input_dma_.pause_for_control();
 		}
 	} else if (control_adc_locked_) {
 		const uint32_t held_us = now_us - control_lock_started_us_;
@@ -165,6 +175,7 @@ void DelayEngine::set_control_adc_lock(bool locked) {
 		if (held_us > control_lock_max_us_) {
 			control_lock_max_us_ = held_us;
 		}
+		audio_input_dma_.resume_after_control();
 	}
 
 	control_adc_locked_ = locked;
@@ -235,16 +246,10 @@ bool DelayEngine::process_audio_tick() {
 
 	uint16_t adc_raw = last_audio_adc_raw_;
 	if (!control_adc_locked_) {
-		adc_select_input(1);
-		if (audio_adc_needs_settle_) {
-			(void) adc_read();
-			audio_adc_needs_settle_ = false;
-		}
-		adc_raw = adc_read();
+		adc_raw = audio_input_dma_.latest_raw_u12();
 		last_audio_adc_raw_ = adc_raw;
 	} else {
 		adc_stale_sample_count_++;
-		audio_adc_needs_settle_ = true;
 	}
 	int16_t input_sample = adc_to_audio_sample(adc_raw);
 	if (kEnableInputAveraging) {
