@@ -13,8 +13,8 @@
 - [x] Build `pico` and `pico2`
 - [x] Run fixed test script
 - [x] Compare with baseline and confirm no regression
-- [ ] Commit Phase 1
-- [ ] Push Phase 1
+- [x] Commit Phase 1
+- [x] Push Phase 1
 
 ## Phase 2: ADC DMA Input (`AudioInputDma`)
 - [ ] Add firmware-local `AudioInputDma` class + integration
