@@ -58,7 +58,9 @@ DelayApp::DelayApp() :
 }
 
 bool DelayApp::init() {
-	stdio_init_all();
+	if (kEnableLogging) {
+		stdio_init_all();
+	}
 
 	brain::ui::PotsConfig pot_cfg = brain::ui::create_default_config(3, 8);
 	pot_cfg.simple = false;
@@ -117,15 +119,17 @@ bool DelayApp::init() {
 		return false;
 	}
 
-	printf("lo-fi-delay started (ISR @ ~%.1f Hz, max delay %lu samples)\n",
-		static_cast<double>(engine_.sample_rate_hz()),
-		static_cast<unsigned long>(DelayEngine::kMaxDelaySamples));
-	if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDacMidpoint) {
-		printf("audio test mode: DAC midpoint\n");
-	} else if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDryPass) {
-		printf("audio test mode: dry pass\n");
-	} else {
-		printf("audio test mode: normal\n");
+	if (kEnableLogging) {
+		printf("lo-fi-delay started (ISR @ ~%.1f Hz, max delay %lu samples)\n",
+			static_cast<double>(engine_.sample_rate_hz()),
+			static_cast<unsigned long>(DelayEngine::kMaxDelaySamples));
+		if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDacMidpoint) {
+			printf("audio test mode: DAC midpoint\n");
+		} else if (DelayEngine::kTestMode == DelayEngine::AudioTestMode::kDryPass) {
+			printf("audio test mode: dry pass\n");
+		} else {
+			printf("audio test mode: normal\n");
+		}
 	}
 	return true;
 }
@@ -154,7 +158,7 @@ void DelayApp::run() {
 
 		update_panel_leds(now_us);
 
-		if ((now_us - last_debug_us) >= kDebugIntervalUs) {
+		if (kEnableLogging && ((now_us - last_debug_us) >= kDebugIntervalUs)) {
 			last_debug_us = now_us;
 			const DelayParams params = engine_.get_params();
 			const DelayStats stats = engine_.get_stats();

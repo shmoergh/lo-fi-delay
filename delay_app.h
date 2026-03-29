@@ -25,6 +25,7 @@ class DelayApp {
 	static const uint32_t kPotActivityHoldUs = 1400000;
 	static const uint8_t kPotActivityDetectThreshold = 2;
 	static const uint32_t kDebugIntervalUs = 300000;
+	static const bool kEnableLogging = false;
 	static const uint32_t kLedUpdateIntervalUs = 20000;
 	static const uint32_t kButtonLongPressMs = 700;
 	static const uint16_t kTapPickupThreshold = 64;
