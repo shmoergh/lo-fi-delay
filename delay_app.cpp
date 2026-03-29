@@ -3,6 +3,7 @@
 #include <pico/stdlib.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 
 #include "brain-common/brain-common.h"
@@ -18,6 +19,10 @@ T clamp_value(T v, T lo, T hi) {
 	return v;
 }
 
+float random_unit() {
+	return static_cast<float>(rand() & 0x7FFF) / 32767.0f;
+}
+
 }  // namespace
 
 DelayApp::DelayApp() :
@@ -28,10 +33,9 @@ DelayApp::DelayApp() :
 	smoothed_delay_ms_(450.0f),
 	last_pot_read_us_(0),
 	pot_active_until_us_(0),
+	last_led_update_us_(0),
 	next_tempo_pulse_us_(0),
 	tempo_pulse_off_us_(0),
-	last_overrun_count_(0),
-	overrun_led_until_us_(0),
 	tempo_pulse_on_(false),
 	freeze_pressed_(false),
 	clear_requested_(false),
@@ -43,6 +47,13 @@ DelayApp::DelayApp() :
 	for (uint8_t i = 0; i < kPotCount; i++) {
 		pot_values_[i] = 0;
 		stable_pot_values_[i] = 0;
+	}
+	for (uint8_t i = 0; i < kPanelLedCount; i++) {
+		led_phase_[i] = 0.0f;
+		led_rate_[i] = 0.0f;
+		led_target_[i] = 0.0f;
+		led_level_[i] = 0.0f;
+		led_next_target_us_[i] = 0;
 	}
 }
 
@@ -68,17 +79,28 @@ bool DelayApp::init() {
 	tap_pickup_pot_raw_ = pot_values_[0];
 	last_pot_read_us_ = time_us_32();
 	pot_active_until_us_ = last_pot_read_us_ + kPotActivityHoldUs;
+	last_led_update_us_ = last_pot_read_us_;
 
 	button_tap_clear_.init(true);
 	button_freeze_.init(true);
 	button_led_.init();
 	panel_leds_.init(brain::ui::LedMode::kPwm);
 	panel_leds_.off_all();
+	srand(last_pot_read_us_);
+	for (uint8_t i = 0; i < kPanelLedCount; i++) {
+		led_phase_[i] = random_unit() * 6.2831853f;
+		led_rate_[i] = 0.35f + random_unit() * 1.2f;
+		led_target_[i] = 0.12f + random_unit() * 0.65f;
+		led_level_[i] = led_target_[i] * 0.5f;
+		led_next_target_us_[i] =
+			last_pot_read_us_ +
+			static_cast<uint32_t>(
+				static_cast<float>(kLedTargetMinHoldUs) +
+				(static_cast<float>(kLedTargetMaxHoldUs - kLedTargetMinHoldUs) * random_unit()));
+	}
 	next_tempo_pulse_us_ = time_us_32() + tempo_pulse_interval_us(smoothed_delay_ms_);
 	tempo_pulse_off_us_ = 0;
 	tempo_pulse_on_ = false;
-	last_overrun_count_ = engine_.get_overrun_count();
-	overrun_led_until_us_ = 0;
 
 	if (kEnableTapTempo) {
 		button_tap_clear_.set_on_single_tap([this]() { this->on_tap_tempo(); });
@@ -130,11 +152,6 @@ void DelayApp::run() {
 			update_control_params();
 		}
 
-		if (freeze_pressed_) {
-			button_led_.on();
-		} else {
-			button_led_.off();
-		}
 		update_panel_leds(now_us);
 
 		if ((now_us - last_debug_us) >= kDebugIntervalUs) {
@@ -211,9 +228,51 @@ void DelayApp::on_freeze_release() {
 }
 
 void DelayApp::update_panel_leds(uint32_t now_us) {
-	panel_leds_.set_brightness(kLedTime, static_cast<uint8_t>(stable_pot_values_[0]));
-	panel_leds_.set_brightness(kLedFeedback, static_cast<uint8_t>(stable_pot_values_[1]));
-	panel_leds_.set_brightness(kLedMix, static_cast<uint8_t>(stable_pot_values_[2]));
+	const uint32_t elapsed_us = now_us - last_led_update_us_;
+	if (elapsed_us >= kLedUpdateIntervalUs) {
+		const float dt = static_cast<float>(elapsed_us) / 1000000.0f;
+		last_led_update_us_ = now_us;
+
+		const float feedback_norm =
+			static_cast<float>(stable_pot_values_[1]) / static_cast<float>(kPotMaxRaw);
+		const float mix_norm = static_cast<float>(stable_pot_values_[2]) / static_cast<float>(kPotMaxRaw);
+		const float activity = 0.35f + 0.65f * ((feedback_norm + mix_norm) * 0.5f);
+
+		for (uint8_t i = 0; i < kPanelLedCount; i++) {
+			if (static_cast<int32_t>(now_us - led_next_target_us_[i]) >= 0) {
+				led_target_[i] = clamp_value<float>(
+					0.10f + (0.80f * random_unit()) * activity, 0.06f, 0.92f);
+				led_rate_[i] = 0.35f + random_unit() * (1.25f + activity);
+				led_next_target_us_[i] =
+					now_us +
+					static_cast<uint32_t>(
+						static_cast<float>(kLedTargetMinHoldUs) +
+						(static_cast<float>(kLedTargetMaxHoldUs - kLedTargetMinHoldUs) * random_unit()));
+			}
+
+			led_phase_[i] += dt * led_rate_[i];
+			if (led_phase_[i] > 6.2831853f) {
+				led_phase_[i] -= 6.2831853f;
+			}
+
+			const float wave = 0.5f + 0.5f * sinf(led_phase_[i] + (static_cast<float>(i) * 0.9f));
+			const float desired =
+				clamp_value<float>(0.04f + (0.54f * led_target_[i]) + (0.42f * wave * activity), 0.0f, 1.0f);
+			const float alpha = (desired > led_level_[i]) ? 0.24f : 0.08f;
+			led_level_[i] += (desired - led_level_[i]) * alpha;
+			led_level_[i] = clamp_value<float>(led_level_[i], 0.0f, 1.0f);
+
+			const float perceptual = led_level_[i] * led_level_[i];
+			const uint8_t brightness =
+				static_cast<uint8_t>(clamp_value<int32_t>(static_cast<int32_t>(perceptual * 255.0f), 0, 255));
+			panel_leds_.set_brightness(i, brightness);
+		}
+	}
+
+	if (freeze_pressed_) {
+		button_led_.on();
+		return;
+	}
 
 	if (now_us >= next_tempo_pulse_us_) {
 		next_tempo_pulse_us_ = now_us + tempo_pulse_interval_us(smoothed_delay_ms_);
@@ -223,17 +282,11 @@ void DelayApp::update_panel_leds(uint32_t now_us) {
 	if (tempo_pulse_on_ && now_us >= tempo_pulse_off_us_) {
 		tempo_pulse_on_ = false;
 	}
-	panel_leds_.set_brightness(kLedTempoPulse, tempo_pulse_on_ ? 255 : 0);
-
-	panel_leds_.set_brightness(kLedFreeze, freeze_pressed_ ? 255 : 0);
-
-	const uint32_t overrun_now = engine_.get_overrun_count();
-	if (overrun_now != last_overrun_count_) {
-		last_overrun_count_ = overrun_now;
-		overrun_led_until_us_ = now_us + kOverrunLedHoldUs;
+	if (tempo_pulse_on_) {
+		button_led_.on();
+	} else {
+		button_led_.off();
 	}
-	const bool overrun_pulse = static_cast<int32_t>(overrun_led_until_us_ - now_us) > 0;
-	panel_leds_.set_brightness(kLedOverrun, overrun_pulse ? 255 : 0);
 }
 
 uint32_t DelayApp::tempo_pulse_interval_us(float delay_ms) const {
