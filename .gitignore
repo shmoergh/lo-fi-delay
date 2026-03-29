@@ -7,6 +7,5 @@ build-pico-2
 .DS_Store
 *.lck
 **/ai
-*.uf2
 .vscode/
-wd*.md
+wd-*
