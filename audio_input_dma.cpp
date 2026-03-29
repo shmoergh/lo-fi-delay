@@ -119,7 +119,12 @@ uint16_t AudioInputDma::latest_raw_u12() {
 	const uintptr_t byte_offset = (write_addr - base) & (kRingBufferBytes - 1u);
 	const uint32_t next_index = static_cast<uint32_t>(byte_offset >> 1);
 	const uint32_t last_index = (next_index - 1u) & (kRingSampleCount - 1u);
-	const uint16_t raw = static_cast<uint16_t>(ring_buffer_[last_index] & 0x0FFFu);
+	uint32_t sum = 0;
+	for (uint8_t i = 0; i < kOutputAverageTaps; i++) {
+		const uint32_t idx = (last_index - i) & (kRingSampleCount - 1u);
+		sum += static_cast<uint16_t>(ring_buffer_[idx] & 0x0FFFu);
+	}
+	const uint16_t raw = static_cast<uint16_t>(sum / static_cast<uint32_t>(kOutputAverageTaps));
 
 	if (settle_discard_remaining_ > 0) {
 		settle_discard_remaining_--;

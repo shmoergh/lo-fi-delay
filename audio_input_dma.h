@@ -22,6 +22,7 @@ class AudioInputDma {
 	static const uint32_t kRingSampleCount = 64;
 	static const uint32_t kDmaTransferCount = 0xFFFFFFFFu;
 	static const uint8_t kPostResumeDiscardSamples = 1;
+	static const uint8_t kOutputAverageTaps = 4;
 
 	void configure_adc_clock(float target_sample_rate_hz);
 	void start_streaming_locked();
