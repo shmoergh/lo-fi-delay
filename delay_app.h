@@ -29,7 +29,7 @@ class DelayApp {
 	static const uint32_t kButtonLongPressMs = 700;
 	static const uint16_t kTapPickupThreshold = 64;
 	static const uint32_t kTapMinMs = 80;
-	static const bool kEnableTapTempo = false;
+	static const bool kEnableTapTempo = true;
 	static const uint16_t kPotMaxRaw = 255;
 	static constexpr float kMinDelayMs = 30.0f;
 	static constexpr float kMaxDelayMs = 1000.0f;
