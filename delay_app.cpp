@@ -23,11 +23,16 @@ T clamp_value(T v, T lo, T hi) {
 DelayApp::DelayApp() :
 	button_tap_clear_(BRAIN_BUTTON_1, 30, kButtonLongPressMs),
 	button_freeze_(BRAIN_BUTTON_2, 30, 500),
-	overrun_led_(BRAIN_LED_1, true),
+	panel_leds_(brain::ui::LedMode::kPwm),
 	next_pot_index_(0),
 	smoothed_delay_ms_(450.0f),
 	last_pot_read_us_(0),
 	pot_active_until_us_(0),
+	next_tempo_pulse_us_(0),
+	tempo_pulse_off_us_(0),
+	last_overrun_count_(0),
+	overrun_led_until_us_(0),
+	tempo_pulse_on_(false),
 	freeze_pressed_(false),
 	clear_requested_(false),
 	ignore_next_tap_(false),
@@ -67,7 +72,13 @@ bool DelayApp::init() {
 	button_tap_clear_.init(true);
 	button_freeze_.init(true);
 	button_led_.init();
-	overrun_led_.init(brain::ui::LedMode::kSimple);
+	panel_leds_.init(brain::ui::LedMode::kPwm);
+	panel_leds_.off_all();
+	next_tempo_pulse_us_ = time_us_32() + tempo_pulse_interval_us(smoothed_delay_ms_);
+	tempo_pulse_off_us_ = 0;
+	tempo_pulse_on_ = false;
+	last_overrun_count_ = engine_.get_overrun_count();
+	overrun_led_until_us_ = 0;
 
 	if (kEnableTapTempo) {
 		button_tap_clear_.set_on_single_tap([this]() { this->on_tap_tempo(); });
@@ -105,6 +116,7 @@ void DelayApp::run() {
 		button_tap_clear_.update();
 		button_freeze_.update();
 		button_led_.update();
+		panel_leds_.update();
 
 		const uint32_t now_us = time_us_32();
 
@@ -123,12 +135,7 @@ void DelayApp::run() {
 		} else {
 			button_led_.off();
 		}
-
-		if (engine_.get_overrun_count() > 0) {
-			overrun_led_.on();
-		} else {
-			overrun_led_.off();
-		}
+		update_panel_leds(now_us);
 
 		if ((now_us - last_debug_us) >= kDebugIntervalUs) {
 			last_debug_us = now_us;
@@ -201,6 +208,39 @@ void DelayApp::on_freeze_press() {
 
 void DelayApp::on_freeze_release() {
 	freeze_pressed_ = false;
+}
+
+void DelayApp::update_panel_leds(uint32_t now_us) {
+	panel_leds_.set_brightness(kLedTime, static_cast<uint8_t>(stable_pot_values_[0]));
+	panel_leds_.set_brightness(kLedFeedback, static_cast<uint8_t>(stable_pot_values_[1]));
+	panel_leds_.set_brightness(kLedMix, static_cast<uint8_t>(stable_pot_values_[2]));
+
+	if (now_us >= next_tempo_pulse_us_) {
+		next_tempo_pulse_us_ = now_us + tempo_pulse_interval_us(smoothed_delay_ms_);
+		tempo_pulse_off_us_ = now_us + kTempoPulseOnUs;
+		tempo_pulse_on_ = true;
+	}
+	if (tempo_pulse_on_ && now_us >= tempo_pulse_off_us_) {
+		tempo_pulse_on_ = false;
+	}
+	panel_leds_.set_brightness(kLedTempoPulse, tempo_pulse_on_ ? 255 : 0);
+
+	panel_leds_.set_brightness(kLedFreeze, freeze_pressed_ ? 255 : 0);
+
+	const uint32_t overrun_now = engine_.get_overrun_count();
+	if (overrun_now != last_overrun_count_) {
+		last_overrun_count_ = overrun_now;
+		overrun_led_until_us_ = now_us + kOverrunLedHoldUs;
+	}
+	const bool overrun_pulse = static_cast<int32_t>(overrun_led_until_us_ - now_us) > 0;
+	panel_leds_.set_brightness(kLedOverrun, overrun_pulse ? 255 : 0);
+}
+
+uint32_t DelayApp::tempo_pulse_interval_us(float delay_ms) const {
+	const float clamped_ms = clamp_value<float>(delay_ms, 1.0f, 4000.0f);
+	const uint32_t interval_us = static_cast<uint32_t>(clamped_ms * 1000.0f + 0.5f);
+	return clamp_value<uint32_t>(
+		interval_us, kTempoPulseMinIntervalUs, kTempoPulseMaxIntervalUs);
 }
 
 void DelayApp::update_control_params() {

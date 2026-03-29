@@ -4,7 +4,7 @@
 
 #include "brain-ui/button-led.h"
 #include "brain-ui/button.h"
-#include "brain-ui/led.h"
+#include "brain-ui/leds.h"
 #include "brain-ui/pots.h"
 #include "delay_engine.h"
 
@@ -37,11 +37,23 @@ class DelayApp {
 	static const uint8_t kPotDeadbandFeedback = 1;
 	static const uint8_t kPotDeadbandMix = 1;
 	static constexpr float kDelaySmoothingAlpha = 0.08f;
+	static const uint8_t kLedTime = 0;
+	static const uint8_t kLedFeedback = 1;
+	static const uint8_t kLedMix = 2;
+	static const uint8_t kLedTempoPulse = 3;
+	static const uint8_t kLedFreeze = 4;
+	static const uint8_t kLedOverrun = 5;
+	static const uint32_t kTempoPulseOnUs = 42000;
+	static const uint32_t kTempoPulseMinIntervalUs = 120000;
+	static const uint32_t kTempoPulseMaxIntervalUs = 1200000;
+	static const uint32_t kOverrunLedHoldUs = 350000;
 
 	void on_tap_tempo();
 	void on_clear_long_press();
 	void on_freeze_press();
 	void on_freeze_release();
+	void update_panel_leds(uint32_t now_us);
+	uint32_t tempo_pulse_interval_us(float delay_ms) const;
 
 	void update_control_params();
 	float map_time_pot_to_ms(uint16_t raw) const;
@@ -52,7 +64,7 @@ class DelayApp {
 	brain::ui::Button button_tap_clear_;
 	brain::ui::Button button_freeze_;
 	brain::ui::ButtonLed button_led_;
-	brain::ui::Led overrun_led_;
+	brain::ui::Leds panel_leds_;
 
 	brain::ui::Pots pots_;
 	DelayEngine engine_;
@@ -63,6 +75,11 @@ class DelayApp {
 	float smoothed_delay_ms_;
 	uint32_t last_pot_read_us_;
 	uint32_t pot_active_until_us_;
+	uint32_t next_tempo_pulse_us_;
+	uint32_t tempo_pulse_off_us_;
+	uint32_t last_overrun_count_;
+	uint32_t overrun_led_until_us_;
+	bool tempo_pulse_on_;
 
 	bool freeze_pressed_;
 	bool clear_requested_;

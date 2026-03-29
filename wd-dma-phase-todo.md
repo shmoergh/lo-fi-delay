@@ -45,11 +45,12 @@
 - [ ] Confirm clear audible benefit vs Phase 3
 - [ ] Commit Phase 4
 - [ ] Push Phase 4
+Note: Currently treated as skipped unless new issues require it.
 
 ## Phase 5: Cleanup + RC
 - [ ] Remove temporary switches not needed for release
 - [ ] Keep minimal test/debug controls
-- [ ] Build `pico` and `pico2`
+- [x] Build `pico` and `pico2`
 - [ ] Final full fixed test script
 - [ ] Create `v0.2-rc1` branch/tag point
 - [ ] Commit Phase 5

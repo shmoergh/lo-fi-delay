@@ -87,6 +87,8 @@ DelayEngine::DelayEngine() :
 	unlock_blend_remaining_(0),
 	was_control_locked_(false),
 	input_gate_open_(false),
+	output_lp_state_a_q15_(0),
+	output_lp_state_b_q15_(0),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
 	tone_lp_q15_(0) {
@@ -121,6 +123,8 @@ bool DelayEngine::init() {
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
 	input_gate_open_ = false;
+	output_lp_state_a_q15_ = 0;
+	output_lp_state_b_q15_ = 0;
 	last_audio_adc_raw_ = 2048;
 
 	if (!audio_input_dma_.init(sample_rate_hz() * 6.0f)) {
@@ -164,6 +168,8 @@ void DelayEngine::clear_and_restart() {
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
 	input_gate_open_ = false;
+	output_lp_state_a_q15_ = 0;
+	output_lp_state_b_q15_ = 0;
 	last_audio_adc_raw_ = 2048;
 	start();
 }
@@ -360,7 +366,20 @@ bool DelayEngine::process_audio_tick() {
 		15;
 	const int32_t wet_part =
 		(static_cast<int32_t>(delayed_sample) * static_cast<int32_t>(params.mix_q15)) >> 15;
-	const int16_t output_sample = clamp_i16(dry_part + wet_part);
+	int16_t output_sample = clamp_i16(dry_part + wet_part);
+	if (kEnableOutputLowPass) {
+		const int32_t in0 = static_cast<int32_t>(output_sample);
+		const int32_t d0 = in0 - output_lp_state_a_q15_;
+		output_lp_state_a_q15_ += (static_cast<int32_t>(kOutputLowPassCoeffQ15) * d0) >> 15;
+		int32_t lp_out = output_lp_state_a_q15_;
+		if (kOutputLowPassPoles >= 2) {
+			const int32_t d1 = output_lp_state_a_q15_ - output_lp_state_b_q15_;
+			output_lp_state_b_q15_ +=
+				(static_cast<int32_t>(kOutputLowPassCoeffQ15) * d1) >> 15;
+			lp_out = output_lp_state_b_q15_;
+		}
+		output_sample = clamp_i16(lp_out);
+	}
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
 	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
