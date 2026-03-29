@@ -27,8 +27,8 @@ build_target() {
 	echo "Saved $output_file"
 }
 
-# Build order: Pico first, then Pico 2.
-build_target "pico" "rp2040" "build-pico" "lo-fi-delay-pico.uf2"
+# RP2040 (pico) build intentionally disabled for current release.
+# build_target "pico" "rp2040" "build-pico" "lo-fi-delay-pico.uf2"
 build_target "pico2" "rp2350-arm-s" "build-pico-2" "lo-fi-delay-pico-2.uf2"
 
 echo "Done."

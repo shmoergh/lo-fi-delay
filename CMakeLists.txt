@@ -24,10 +24,14 @@ add_subdirectory(brain-sdk)
 
 add_executable(lo-fi-delay
 	main.cpp
-	audio_input_dma.cpp
-	fast_dac_out.cpp
-	delay_engine.cpp
-	delay_app.cpp
+	src/audio_input_dma.cpp
+	src/fast_dac_out.cpp
+	src/delay_engine.cpp
+	src/delay_app.cpp
+)
+
+target_include_directories(lo-fi-delay PRIVATE
+	src
 )
 
 target_link_libraries(lo-fi-delay

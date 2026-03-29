@@ -2,6 +2,8 @@
 
 Digital mono delay firmware for the Shmoergh Brain platform, optimized for stable interrupt-driven audio with DMA-based ADC input.
 
+Current release target: **Pico 2 only** (`rp2350-arm-s`).
+
 ## What This Firmware Does
 
 - Processes `Audio/CV In A` and outputs on `Audio/CV Out A`.
@@ -68,13 +70,10 @@ Tap tempo uses pickup behavior:
 - Max delay around `1.0 s` at current sample rate.
 - No dynamic allocation in audio engine.
 
-## Design Choices for Pico and Pico 2
+## Platform Support
 
-- Audio ISR is integer/fixed-point oriented for RP2040 safety.
-- Control-rate math uses float where convenient.
-- Same firmware builds for:
-- `pico` (RP2040)
-- `pico2` (RP2350 ARM-S)
+- Current release build target: `pico2` (`rp2350-arm-s`) only.
+- RP2040 (`pico`) build is intentionally disabled in `build-firmware.sh`.
 
 ## Build
 
@@ -91,30 +90,27 @@ Tap tempo uses pickup behavior:
 ./build-firmware.sh
 ```
 
-This builds both targets and copies UF2 artifacts to repo root:
+This builds the Pico 2 target and copies UF2 artifact to repo root:
 
-- `lo-fi-delay-pico.uf2`
 - `lo-fi-delay-pico-2.uf2`
 
 ## Flash
 
 1. Hold BOOTSEL on target hardware while connecting USB.
 2. Mount the drive.
-3. Copy the appropriate UF2:
-- `lo-fi-delay-pico.uf2` for RP2040
-- `lo-fi-delay-pico-2.uf2` for RP2350
+3. Copy `lo-fi-delay-pico-2.uf2` to the mounted drive.
 
 ## Logging and Debug Modes
 
 ### Runtime Logging
 
 - Logging is disabled for release by default:
-- `DelayApp::kEnableLogging = false` in `delay_app.h`.
+- `DelayApp::kEnableLogging = false` in `src/delay_app.h`.
 - To enable serial status logging, set it to `true` and rebuild.
 
 ### Audio Test Modes
 
-Compile-time mode switch in `delay_engine.h`:
+Compile-time mode switch in `src/delay_engine.h`:
 - `DelayEngine::kTestMode = AudioTestMode::kNormal`
 - Alternate modes available:
 - `kDryPass`
@@ -143,10 +139,10 @@ DMA input specifics:
 ## Repository Structure
 
 - `main.cpp`: entrypoint
-- `delay_app.h/.cpp`: UI, controls, LEDs, parameter mapping, app loop
-- `delay_engine.h/.cpp`: ISR audio engine + DSP + delay line
-- `audio_input_dma.h/.cpp`: ADC DMA capture path
-- `fast_dac_out.h/.cpp`: fast SPI DAC writes and output coupling setup
+- `src/delay_app.h/.cpp`: UI, controls, LEDs, parameter mapping, app loop
+- `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line
+- `src/audio_input_dma.h/.cpp`: ADC DMA capture path
+- `src/fast_dac_out.h/.cpp`: fast SPI DAC writes and output coupling setup
 - `brain-sdk/`: Brain SDK submodule
 
 ## Known Scope and Limitations (Current Release)
