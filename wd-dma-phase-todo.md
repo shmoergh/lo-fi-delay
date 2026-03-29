@@ -48,11 +48,11 @@
 Note: Currently treated as skipped unless new issues require it.
 
 ## Phase 5: Cleanup + RC
-- [ ] Remove temporary switches not needed for release
-- [ ] Keep minimal test/debug controls
+- [x] Remove temporary switches not needed for release
+- [x] Keep minimal test/debug controls
 - [x] Build `pico` and `pico2`
 - [ ] Final full fixed test script
-- [ ] Create `v0.2-rc1` branch/tag point
+- [x] Create `v0.2-rc1` branch/tag point
 - [ ] Commit Phase 5
 - [ ] Push Phase 5
 

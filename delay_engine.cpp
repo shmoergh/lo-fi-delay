@@ -86,9 +86,6 @@ DelayEngine::DelayEngine() :
 	lock_hold_sample_(0),
 	unlock_blend_remaining_(0),
 	was_control_locked_(false),
-	input_gate_open_(false),
-	output_lp_state_a_q15_(0),
-	output_lp_state_b_q15_(0),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
 	tone_lp_q15_(0) {
@@ -122,9 +119,6 @@ bool DelayEngine::init() {
 	lock_hold_sample_ = 0;
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
-	input_gate_open_ = false;
-	output_lp_state_a_q15_ = 0;
-	output_lp_state_b_q15_ = 0;
 	last_audio_adc_raw_ = 2048;
 
 	if (!audio_input_dma_.init(sample_rate_hz() * 6.0f)) {
@@ -167,9 +161,6 @@ void DelayEngine::clear_and_restart() {
 	lock_hold_sample_ = 0;
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
-	input_gate_open_ = false;
-	output_lp_state_a_q15_ = 0;
-	output_lp_state_b_q15_ = 0;
 	last_audio_adc_raw_ = 2048;
 	start();
 }
@@ -291,36 +282,19 @@ bool DelayEngine::process_audio_tick() {
 		input_sample = clamp_i16((hold_part + live_part) / static_cast<int32_t>(blend_total));
 		unlock_blend_remaining_--;
 	}
-	if (kEnableInputDcBlock) {
-		// 1-pole high-pass: y[n] = x[n] - x[n-1] + a * y[n-1]
-		const int32_t x = static_cast<int32_t>(input_sample);
-		const int32_t y = (x - static_cast<int32_t>(dc_block_x_prev_)) +
-			((static_cast<int32_t>(kDcBlockCoeffQ15) * dc_block_y_prev_) >> 15);
-		dc_block_x_prev_ = input_sample;
-		dc_block_y_prev_ = clamp_value<int32_t>(y, -32768, 32767);
-		input_sample = static_cast<int16_t>(dc_block_y_prev_);
-	}
-	if (kEnableInputAveraging) {
-		const int32_t averaged = (static_cast<int32_t>(input_sample) +
-								 static_cast<int32_t>(prev_input_raw_sample_)) /
-			2;
-		prev_input_raw_sample_ = input_sample;
-		input_sample = clamp_i16(averaged);
-	}
-	if (kEnableInputNoiseGate) {
-		const int32_t abs_input = (input_sample < 0) ? -static_cast<int32_t>(input_sample)
-													 : static_cast<int32_t>(input_sample);
-		if (input_gate_open_) {
-			if (abs_input <= static_cast<int32_t>(kInputGateCloseThreshold)) {
-				input_gate_open_ = false;
-			}
-		} else if (abs_input >= static_cast<int32_t>(kInputGateOpenThreshold)) {
-			input_gate_open_ = true;
-		}
-		if (!input_gate_open_) {
-			input_sample = 0;
-		}
-	}
+	// 1-pole high-pass: y[n] = x[n] - x[n-1] + a * y[n-1]
+	const int32_t x = static_cast<int32_t>(input_sample);
+	const int32_t y = (x - static_cast<int32_t>(dc_block_x_prev_)) +
+		((static_cast<int32_t>(kDcBlockCoeffQ15) * dc_block_y_prev_) >> 15);
+	dc_block_x_prev_ = input_sample;
+	dc_block_y_prev_ = clamp_value<int32_t>(y, -32768, 32767);
+	input_sample = static_cast<int16_t>(dc_block_y_prev_);
+
+	const int32_t averaged = (static_cast<int32_t>(input_sample) +
+							 static_cast<int32_t>(prev_input_raw_sample_)) /
+		2;
+	prev_input_raw_sample_ = input_sample;
+	input_sample = clamp_i16(averaged);
 
 	if (kTestMode == AudioTestMode::kDryPass) {
 		dac_.write_channel_a_raw(sample_to_dac_u12(input_sample));
@@ -366,20 +340,7 @@ bool DelayEngine::process_audio_tick() {
 		15;
 	const int32_t wet_part =
 		(static_cast<int32_t>(delayed_sample) * static_cast<int32_t>(params.mix_q15)) >> 15;
-	int16_t output_sample = clamp_i16(dry_part + wet_part);
-	if (kEnableOutputLowPass) {
-		const int32_t in0 = static_cast<int32_t>(output_sample);
-		const int32_t d0 = in0 - output_lp_state_a_q15_;
-		output_lp_state_a_q15_ += (static_cast<int32_t>(kOutputLowPassCoeffQ15) * d0) >> 15;
-		int32_t lp_out = output_lp_state_a_q15_;
-		if (kOutputLowPassPoles >= 2) {
-			const int32_t d1 = output_lp_state_a_q15_ - output_lp_state_b_q15_;
-			output_lp_state_b_q15_ +=
-				(static_cast<int32_t>(kOutputLowPassCoeffQ15) * d1) >> 15;
-			lp_out = output_lp_state_b_q15_;
-		}
-		output_sample = clamp_i16(lp_out);
-	}
+	const int16_t output_sample = clamp_i16(dry_part + wet_part);
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
 	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
