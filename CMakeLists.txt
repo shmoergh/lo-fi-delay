@@ -16,6 +16,11 @@ include(brain-sdk/pico_sdk_import.cmake)
 
 project(lo-fi-delay C CXX ASM)
 
+# Reserve SDK-managed storage sectors (app blob + calibration [+ RP2350 guard])
+# before Pico SDK initialization so linker flash size is adjusted safely.
+include(brain-sdk/cmake/brain-storage-reserve-flash.cmake)
+brain_storage_configure_flash_reservation()
+
 # Initialize the Pico SDK
 pico_sdk_init()
 
