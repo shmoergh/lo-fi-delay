@@ -1,16 +1,11 @@
 #include "delay_engine.h"
 
-#include <hardware/adc.h>
-#include <hardware/dma.h>
-#include <hardware/gpio.h>
-#include <hardware/spi.h>
 #include <hardware/sync.h>
-#include <pico/time.h>
 
+#include <cstdio>
 #include <cstring>
 
 #include "brain/include/common.h"
-#include "brain/include/gpio-setup.h"
 
 namespace firmware {
 
@@ -27,12 +22,6 @@ int16_t clamp_i16(int32_t v) {
 	if (v > 32767) return 32767;
 	if (v < -32768) return -32768;
 	return static_cast<int16_t>(v);
-}
-
-uint16_t sample_to_dac_u12(int16_t sample) {
-	int32_t dac = 2048 + ((static_cast<int32_t>(sample) * 2047) / 32768);
-	dac = clamp_value<int32_t>(dac, 0, 4095);
-	return static_cast<uint16_t>(dac);
 }
 
 int16_t soft_clip_i16(int32_t v) {
@@ -57,108 +46,103 @@ const int32_t kInputHalfSpanRaw = ((kInputHighRaw - kInputLowRaw) > 0)
 	? ((kInputHighRaw - kInputLowRaw) / 2)
 	: 1;
 
-int16_t adc_to_audio_sample(uint16_t adc_raw) {
-	const int32_t centered = static_cast<int32_t>(adc_raw) - kInputMidRaw;
+int16_t normalize_audio_input_sample(int16_t input_sample) {
+	// AudioProcessor provides an ADC-centered int16 sample; normalize to board-calibrated -5..+5V span.
+	const int32_t adc_raw = 2048 + (static_cast<int32_t>(input_sample) >> 4);
+	const int32_t centered = adc_raw - kInputMidRaw;
 	const int32_t scaled = (centered * 32767) / kInputHalfSpanRaw;
 	return clamp_i16(scaled);
 }
 
-void mark_overrun_if_needed(volatile uint32_t& counter, uint32_t tick_start_us, uint32_t budget_us) {
-	const uint32_t elapsed_us = time_us_32() - tick_start_us;
-	if (elapsed_us > budget_us) {
-		counter++;
-	}
-}
-
 }  // namespace
 
-DelayEngine* DelayEngine::instance_ = nullptr;
-
 DelayEngine::DelayEngine() :
+	brain_(nullptr),
+	initialized_(false),
 	running_(false),
-	isr_overrun_count_(0),
-	audio_tick_count_(0),
-	last_audio_adc_raw_(kAdcMidRaw),
 	dc_block_x_prev_(0),
 	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
 	prev_delayed_sample_(0),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
-	tone_lp_q15_(0),
-	adc_dma_channel_(-1),
-	adc_initialized_(false),
-	adc_running_(false),
-	adc_dma_read_index_(0),
-	adc_expect_pot_sample_(true),
-	adc_held_audio_raw_u12_(kAdcMidRaw),
-	adc_pot_raw_u12_{kAdcMidRaw, kAdcMidRaw, kAdcMidRaw},
-	adc_pot_mux_switch_count_(0),
-	adc_pot_settle_discard_count_(0),
-	adc_active_pot_index_(0),
-	adc_pot_discard_remaining_(0),
-	adc_pot_accumulator_(0),
-	adc_pot_accumulator_count_(0),
-	adc_audio_history_{kAdcMidRaw, kAdcMidRaw, kAdcMidRaw, kAdcMidRaw},
-	adc_audio_history_sum_(static_cast<uint32_t>(kAdcMidRaw) * kAdcAudioAverageTaps),
-	adc_audio_history_index_(0),
-	adc_ring_buffer_{} {
+	tone_lp_q15_(0) {
 	params_.delay_samples = static_cast<uint32_t>(0.35f * sample_rate_hz());
 	params_.feedback_q15 = static_cast<int16_t>(0.35f * static_cast<float>(kQ15Max));
 	params_.mix_q15 = static_cast<int16_t>(0.45f * static_cast<float>(kQ15Max));
 	params_.tone_q15 = static_cast<int16_t>(0.22f * static_cast<float>(kQ15Max));
 	params_.freeze = false;
 	current_delay_q16_ = params_.delay_samples << 16;
+	std::memset(delay_buffer_, 0, sizeof(delay_buffer_));
 }
 
-bool DelayEngine::init() {
-	if (!init_dac()) {
-		return false;
+bool DelayEngine::init(Brain& brain) {
+	if (initialized_) {
+		return true;
 	}
 
-	memset(delay_buffer_, 0, sizeof(delay_buffer_));
-	write_index_ = 0;
-	current_delay_q16_ = params_.delay_samples << 16;
-	tone_lp_q15_ = 0;
-	isr_overrun_count_ = 0;
-	audio_tick_count_ = 0;
-	dc_block_x_prev_ = 0;
-	dc_block_y_prev_ = 0;
-	prev_input_raw_sample_ = 0;
-	prev_delayed_sample_ = 0;
-	last_audio_adc_raw_ = kAdcMidRaw;
-
-	if (!init_adc_dma(sample_rate_hz())) {
-		return false;
-	}
-
-	instance_ = this;
+	brain_ = &brain;
+	clear_and_restart();
+	initialized_ = true;
 	return true;
 }
 
 bool DelayEngine::start() {
-	if (running_) return true;
-	if (!start_adc_dma()) {
+	if (!initialized_ || brain_ == nullptr) {
 		return false;
 	}
-	running_ = add_repeating_timer_us(-kAudioPeriodUs, DelayEngine::timer_callback, nullptr, &timer_);
-	if (!running_) {
-		stop_adc_dma();
+	if (running_) {
+		return true;
 	}
-	return running_;
+
+	AudioProcessorConfig config{};
+	config.sample_period_us = static_cast<uint32_t>(kAudioPeriodUs);
+	config.enable_pot_mux = true;
+	config.pot_count = kAdcPotCount;
+	config.pot_settle_discard_samples = kAdcPotDiscardAfterSwitch;
+	config.pot_average_samples = kAdcPotSamplesPerHold;
+	config.max_dma_drain_samples_per_tick = kAdcMaxDmaDrainPerTick;
+
+	if (try_start_audio_processor(config)) {
+		running_ = true;
+		return true;
+	}
+
+	// Fallback profile: lighter pot processing to reduce ISR load during bring-up.
+	AudioProcessorConfig fallback = config;
+	fallback.pot_settle_discard_samples = 2;
+	fallback.pot_average_samples = 16;
+	fallback.max_dma_drain_samples_per_tick = 64;
+	if (try_start_audio_processor(fallback)) {
+		running_ = true;
+		return true;
+	}
+
+	// Final fallback: slightly longer tick while keeping topology identical.
+	AudioProcessorConfig fallback_slow = fallback;
+	fallback_slow.sample_period_us = 50;
+	if (try_start_audio_processor(fallback_slow)) {
+		running_ = true;
+		return true;
+	}
+
+	return false;
 }
 
 void DelayEngine::stop() {
-	if (running_) {
-		cancel_repeating_timer(&timer_);
-		running_ = false;
+	if (!running_) {
+		return;
 	}
-	stop_adc_dma();
+
+	if (brain_ != nullptr && brain_->is_audio_processor_initialized()) {
+		brain_->audio_processor.stop();
+	}
+	running_ = false;
 }
 
 void DelayEngine::clear_and_restart() {
-	stop();
-	memset(delay_buffer_, 0, sizeof(delay_buffer_));
+	const uint32_t irq_state = save_and_disable_interrupts();
+	std::memset(delay_buffer_, 0, sizeof(delay_buffer_));
 	write_index_ = 0;
 	current_delay_q16_ = params_.delay_samples << 16;
 	tone_lp_q15_ = 0;
@@ -166,8 +150,7 @@ void DelayEngine::clear_and_restart() {
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
 	prev_delayed_sample_ = 0;
-	last_audio_adc_raw_ = kAdcMidRaw;
-	start();
+	restore_interrupts(irq_state);
 }
 
 void DelayEngine::set_params(const DelayParams& params) {
@@ -180,8 +163,10 @@ uint16_t DelayEngine::read_pot_raw_u8(uint8_t pot_index) const {
 	if (pot_index >= kAdcPotCount) {
 		return 0;
 	}
-	const uint16_t raw12 = adc_pot_raw_u12_[pot_index];
-	return static_cast<uint16_t>((static_cast<uint32_t>(raw12) * kAdcPotMaxRaw) / kAdcMaxRaw);
+	if (brain_ == nullptr || !brain_->is_audio_processor_initialized()) {
+		return kAdcPotMaxRaw / 2;
+	}
+	return brain_->audio_processor.get_pot_raw_u8(pot_index);
 }
 
 DelayParams DelayEngine::get_params() const {
@@ -192,13 +177,17 @@ DelayParams DelayEngine::get_params() const {
 }
 
 DelayStats DelayEngine::get_stats() const {
-	const uint32_t irq_state = save_and_disable_interrupts();
 	DelayStats stats{};
-	stats.audio_tick_count = audio_tick_count_;
-	stats.pot_mux_switch_count = adc_pot_mux_switch_count_;
-	stats.pot_settle_discard_count = adc_pot_settle_discard_count_;
-	stats.overrun_count = isr_overrun_count_;
-	restore_interrupts(irq_state);
+	if (brain_ == nullptr || !brain_->is_audio_processor_initialized()) {
+		return stats;
+	}
+
+	const AudioProcessorStats audio_stats = brain_->audio_processor.get_stats();
+	stats.audio_tick_count = static_cast<uint32_t>(
+		(audio_stats.tick_count > 0xFFFFFFFFULL) ? 0xFFFFFFFFULL : audio_stats.tick_count);
+	stats.pot_mux_switch_count = audio_stats.pot_mux_switch_count;
+	stats.pot_settle_discard_count = audio_stats.pot_settle_discard_count;
+	stats.overrun_count = audio_stats.overrun_count;
 	return stats;
 }
 
@@ -206,21 +195,55 @@ float DelayEngine::sample_rate_hz() const {
 	return 1000000.0f / static_cast<float>(kAudioPeriodUs);
 }
 
-bool DelayEngine::timer_callback(repeating_timer* timer) {
-	(void) timer;
-	if (instance_ == nullptr) return true;
-	return instance_->process_audio_tick();
+bool DelayEngine::try_start_audio_processor(const AudioProcessorConfig& config) {
+	if (brain_ == nullptr) {
+		return false;
+	}
+
+	const BrainInitStatus init_status =
+		brain_->init_audio_processor(config, &DelayEngine::audio_callback, this);
+	if (brain_init_succeeded(init_status) || init_status == BrainInitStatus::kAlreadyInitialized) {
+		return true;
+	}
+
+	// Diagnostic fallback: call utility directly to distinguish Brain guardrail failures
+	// from low-level AudioProcessor initialization failures.
+	fprintf(
+		stderr,
+		"[delay] brain.init_audio_processor failed (period=%lu, pots=%u, discard=%u, avg=%u, drain=%u). Retrying direct init.\n",
+		static_cast<unsigned long>(config.sample_period_us),
+		static_cast<unsigned>(config.pot_count),
+		static_cast<unsigned>(config.pot_settle_discard_samples),
+		static_cast<unsigned>(config.pot_average_samples),
+		static_cast<unsigned>(config.max_dma_drain_samples_per_tick));
+
+	const BrainInitStatus direct_status =
+		brain_->audio_processor.init(config, &DelayEngine::audio_callback, this);
+	if (brain_init_succeeded(direct_status) || direct_status == BrainInitStatus::kAlreadyInitialized) {
+		fprintf(stderr, "[delay] direct audio_processor.init succeeded.\n");
+		return true;
+	}
+
+	fprintf(stderr, "[delay] direct audio_processor.init failed.\n");
+	return false;
 }
 
-// Main audio ISR tick: pull ADC sample, run delay DSP, and write DAC.
-bool DelayEngine::process_audio_tick() {
-	const uint32_t tick_start_us = time_us_32();
-	audio_tick_count_++;
+int16_t DelayEngine::audio_callback(
+	int16_t input_sample,
+	const AudioProcessorFrame* frame,
+	void* user_ctx) {
+	DelayEngine* engine = static_cast<DelayEngine*>(user_ctx);
+	if (engine == nullptr) {
+		return input_sample;
+	}
+	return engine->process_audio_sample(input_sample, frame);
+}
+
+int16_t DelayEngine::process_audio_sample(int16_t input_sample, const AudioProcessorFrame* frame) {
+	(void) frame;
 
 	if (kTestMode == AudioTestMode::kDacMidpoint) {
-		write_dac_channel_a_raw(2048);
-		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
-		return true;
+		return 0;
 	}
 
 	const DelayParams params = params_;
@@ -239,10 +262,7 @@ bool DelayEngine::process_audio_tick() {
 	}
 	const bool delay_slewing = (current_delay_q16_ != target_delay_q16);
 
-	poll_adc_dma();
-	const uint16_t adc_raw = latest_audio_raw_u12();
-	last_audio_adc_raw_ = adc_raw;
-	int16_t input_sample = adc_to_audio_sample(adc_raw);
+	input_sample = normalize_audio_input_sample(input_sample);
 
 	// Remove DC and slow offset drift from the input path.
 	const int32_t x = static_cast<int32_t>(input_sample);
@@ -259,19 +279,13 @@ bool DelayEngine::process_audio_tick() {
 	input_sample = clamp_i16(averaged);
 
 	if (kTestMode == AudioTestMode::kDryPass) {
-		write_dac_channel_a_raw(sample_to_dac_u12(input_sample));
-		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
-		return true;
+		return input_sample;
 	}
 
-	const int16_t output_sample = process_sample(params, input_sample, delay_slewing);
-	write_dac_channel_a_raw(sample_to_dac_u12(output_sample));
-	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
-	return true;
+	return process_delay_sample(params, input_sample, delay_slewing);
 }
 
-// Core delay sample step (fractional read, feedback write, dry/wet output mix).
-int16_t DelayEngine::process_sample(
+int16_t DelayEngine::process_delay_sample(
 	const DelayParams& params,
 	int16_t input_sample,
 	bool delay_slewing) {
@@ -322,230 +336,6 @@ int16_t DelayEngine::process_sample(
 	const int32_t wet_part =
 		(static_cast<int32_t>(delayed_sample) * static_cast<int32_t>(params.mix_q15)) >> 15;
 	return clamp_i16(dry_part + wet_part);
-}
-
-// ---- DAC implementation --------------------------------------------------
-
-bool DelayEngine::init_dac() {
-	spi_init(spi0, kDacSpiFrequencyHz);
-	spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
-
-	gpio_set_function(GPIO_BRAIN_AUDIO_CV_OUT_SCK, GPIO_FUNC_SPI);
-	gpio_set_function(GPIO_BRAIN_AUDIO_CV_OUT_TX, GPIO_FUNC_SPI);
-
-	gpio_init(GPIO_BRAIN_AUDIO_CV_OUT_CS);
-	gpio_set_dir(GPIO_BRAIN_AUDIO_CV_OUT_CS, GPIO_OUT);
-	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_CS, 1);
-
-	gpio_init(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_A);
-	gpio_set_dir(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_A, GPIO_OUT);
-	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_A, 1);  // AC coupled
-
-	gpio_init(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_B);
-	gpio_set_dir(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_B, GPIO_OUT);
-	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_COUPLING_B, 0);  // Keep channel B DC coupled
-
-	return true;
-}
-
-void DelayEngine::write_dac_channel_a_raw(uint16_t raw12) {
-	raw12 = clamp_value<uint16_t>(raw12, 0, 4095);
-
-	constexpr uint8_t kConfig = (0u << 3) | (0u << 2) | (0u << 1) | 1u;
-	uint8_t data[2];
-	data[0] = static_cast<uint8_t>((kConfig << 4) | ((raw12 >> 8) & 0x0F));
-	data[1] = static_cast<uint8_t>(raw12 & 0xFF);
-
-	asm volatile("nop \n nop \n nop");
-	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_CS, 0);
-	asm volatile("nop \n nop \n nop");
-	spi_write_blocking(spi0, data, 2);
-	asm volatile("nop \n nop \n nop");
-	gpio_put(GPIO_BRAIN_AUDIO_CV_OUT_CS, 1);
-	asm volatile("nop \n nop \n nop");
-}
-
-// ---- ADC DMA implementation ---------------------------------------------
-
-bool DelayEngine::init_adc_dma(float audio_sample_rate_hz) {
-	if (adc_initialized_) {
-		return true;
-	}
-
-	adc_init();
-	adc_gpio_init(GPIO_BRAIN_AUDIO_CV_IN_A);
-	adc_gpio_init(GPIO_BRAIN_POTMUX_ADC);
-
-	gpio_init(GPIO_BRAIN_POTMUX_S0);
-	gpio_set_dir(GPIO_BRAIN_POTMUX_S0, GPIO_OUT);
-	gpio_init(GPIO_BRAIN_POTMUX_S1);
-	gpio_set_dir(GPIO_BRAIN_POTMUX_S1, GPIO_OUT);
-	set_active_pot_mux(0);
-
-	configure_adc_clock(audio_sample_rate_hz);
-	adc_fifo_setup(
-		true,   // Write each conversion to FIFO
-		true,   // Enable DREQ for DMA
-		1,      // DREQ when at least one sample is available
-		false,  // No error bit in FIFO stream
-		false   // Keep full 12-bit samples
-	);
-	adc_fifo_drain();
-
-	adc_dma_channel_ = dma_claim_unused_channel(true);
-	memset((void*) adc_ring_buffer_, 0, sizeof(adc_ring_buffer_));
-	adc_initialized_ = true;
-	return true;
-}
-
-bool DelayEngine::start_adc_dma() {
-	if (!adc_initialized_) {
-		return false;
-	}
-	if (adc_running_) {
-		return true;
-	}
-
-	const uint32_t irq_state = save_and_disable_interrupts();
-	adc_dma_read_index_ = 0;
-	adc_expect_pot_sample_ = true;
-	adc_held_audio_raw_u12_ = kAdcMidRaw;
-	adc_pot_raw_u12_[0] = kAdcMidRaw;
-	adc_pot_raw_u12_[1] = kAdcMidRaw;
-	adc_pot_raw_u12_[2] = kAdcMidRaw;
-	adc_pot_mux_switch_count_ = 0;
-	adc_pot_settle_discard_count_ = 0;
-	adc_active_pot_index_ = 0;
-	adc_pot_discard_remaining_ = kAdcPotDiscardAfterSwitch;
-	adc_pot_accumulator_ = 0;
-	adc_pot_accumulator_count_ = 0;
-	adc_audio_history_sum_ = 0;
-	for (uint8_t i = 0; i < kAdcAudioAverageTaps; i++) {
-		adc_audio_history_[i] = kAdcMidRaw;
-		adc_audio_history_sum_ += kAdcMidRaw;
-	}
-	adc_audio_history_index_ = 0;
-
-	start_adc_streaming();
-	adc_running_ = true;
-	restore_interrupts(irq_state);
-	return true;
-}
-
-void DelayEngine::stop_adc_dma() {
-	if (!adc_initialized_ || !adc_running_) {
-		return;
-	}
-
-	const uint32_t irq_state = save_and_disable_interrupts();
-	adc_run(false);
-	dma_channel_abort(static_cast<uint>(adc_dma_channel_));
-	adc_fifo_drain();
-	adc_running_ = false;
-	restore_interrupts(irq_state);
-}
-
-void DelayEngine::poll_adc_dma() {
-	if (!adc_running_) {
-		return;
-	}
-
-	const uintptr_t base = reinterpret_cast<uintptr_t>(adc_ring_buffer_);
-	const uintptr_t write_addr = dma_channel_hw_addr(static_cast<uint>(adc_dma_channel_))->write_addr;
-	const uintptr_t byte_offset = (write_addr - base) & (kAdcRingBufferBytes - 1u);
-	const uint32_t next_index = static_cast<uint32_t>(byte_offset >> 1);
-
-	uint32_t processed_samples = 0;
-	while (adc_dma_read_index_ != next_index) {
-		const uint16_t raw_u12 = static_cast<uint16_t>(adc_ring_buffer_[adc_dma_read_index_] & 0x0FFFu);
-		if (adc_expect_pot_sample_) {
-			process_adc_pot_sample(raw_u12);
-		} else {
-			process_adc_audio_sample(raw_u12);
-		}
-		adc_expect_pot_sample_ = !adc_expect_pot_sample_;
-		adc_dma_read_index_ = (adc_dma_read_index_ + 1u) & (kAdcRingSampleCount - 1u);
-		processed_samples++;
-		if (processed_samples >= kAdcMaxSamplesPerPoll) {
-			break;
-		}
-	}
-}
-
-uint16_t DelayEngine::latest_audio_raw_u12() const {
-	return adc_held_audio_raw_u12_;
-}
-
-void DelayEngine::configure_adc_clock(float audio_sample_rate_hz) {
-	const float safe_audio_rate = clamp_value<float>(audio_sample_rate_hz, 1000.0f, 48000.0f);
-	const float total_conversion_rate_hz = safe_audio_rate * 8.0f;
-	const float adc_clock_hz = 48000000.0f;
-	const float divisor = (adc_clock_hz / total_conversion_rate_hz) - 1.0f;
-	adc_set_clkdiv(divisor);
-}
-
-void DelayEngine::start_adc_streaming() {
-	set_active_pot_mux(0);
-	adc_set_round_robin((1u << kAdcPotChannel) | (1u << kAdcAudioChannel));
-	adc_select_input(kAdcPotChannel);
-	adc_fifo_drain();
-	adc_run(false);
-
-	dma_channel_config cfg = dma_channel_get_default_config(static_cast<uint>(adc_dma_channel_));
-	channel_config_set_transfer_data_size(&cfg, DMA_SIZE_16);
-	channel_config_set_read_increment(&cfg, false);
-	channel_config_set_write_increment(&cfg, true);
-	channel_config_set_dreq(&cfg, DREQ_ADC);
-	channel_config_set_ring(&cfg, true, kAdcRingWrapBits);
-
-	dma_channel_configure(
-		static_cast<uint>(adc_dma_channel_),
-		&cfg,
-		(void*) adc_ring_buffer_,
-		&adc_hw->fifo,
-		kAdcDmaTransferCount,
-		false);
-
-	adc_run(true);
-	dma_channel_start(static_cast<uint>(adc_dma_channel_));
-}
-
-void DelayEngine::process_adc_audio_sample(uint16_t raw_u12) {
-	adc_audio_history_sum_ -= adc_audio_history_[adc_audio_history_index_];
-	adc_audio_history_[adc_audio_history_index_] = raw_u12;
-	adc_audio_history_sum_ += raw_u12;
-	adc_audio_history_index_ = static_cast<uint8_t>((adc_audio_history_index_ + 1u) % kAdcAudioAverageTaps);
-	adc_held_audio_raw_u12_ = static_cast<uint16_t>(adc_audio_history_sum_ / kAdcAudioAverageTaps);
-}
-
-void DelayEngine::process_adc_pot_sample(uint16_t raw_u12) {
-	if (adc_pot_discard_remaining_ > 0) {
-		adc_pot_discard_remaining_--;
-		adc_pot_settle_discard_count_++;
-		return;
-	}
-
-	adc_pot_accumulator_ += raw_u12;
-	adc_pot_accumulator_count_++;
-	if (adc_pot_accumulator_count_ < kAdcPotSamplesPerHold) {
-		return;
-	}
-
-	adc_pot_raw_u12_[adc_active_pot_index_] =
-		static_cast<uint16_t>(adc_pot_accumulator_ / static_cast<uint32_t>(adc_pot_accumulator_count_));
-	adc_pot_accumulator_ = 0;
-	adc_pot_accumulator_count_ = 0;
-
-	const uint8_t next_pot = static_cast<uint8_t>((adc_active_pot_index_ + 1u) % kAdcPotCount);
-	set_active_pot_mux(next_pot);
-	adc_pot_discard_remaining_ = kAdcPotDiscardAfterSwitch;
-	adc_pot_mux_switch_count_++;
-}
-
-void DelayEngine::set_active_pot_mux(uint8_t pot_index) {
-	adc_active_pot_index_ = static_cast<uint8_t>(pot_index % kAdcPotCount);
-	gpio_put(GPIO_BRAIN_POTMUX_S0, adc_active_pot_index_ & 0x01u);
-	gpio_put(GPIO_BRAIN_POTMUX_S1, (adc_active_pot_index_ >> 1) & 0x01u);
 }
 
 }  // namespace firmware

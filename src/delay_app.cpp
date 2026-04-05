@@ -53,9 +53,7 @@ DelayApp::DelayApp() :
 }
 
 bool DelayApp::init() {
-	if (kEnableLogging) {
-		stdio_init_all();
-	}
+	stdio_init_all();
 
 	const uint32_t now_us = time_us_32();
 	last_led_update_us_ = now_us;
@@ -80,10 +78,16 @@ bool DelayApp::init() {
 	init_led_animation(now_us);
 	wire_button_callbacks();
 
-	if (!engine_.init()) {
+	if (!engine_.init(brain_)) {
+		fprintf(stderr, "[delay] engine.init failed\n");
+		brain_.leds.on_all();
+		brain_.leds.button_on();
 		return false;
 	}
 	if (!engine_.start()) {
+		fprintf(stderr, "[delay] engine.start failed (AudioProcessor init path)\n");
+		brain_.leds.on_all();
+		brain_.leds.button_on();
 		return false;
 	}
 
