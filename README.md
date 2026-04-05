@@ -49,9 +49,9 @@ Tap tempo uses pickup behavior:
 
 ### Input Path
 
-- Unified ADC DMA round-robin samples ADC0 (pot mux) and ADC1 (audio input) continuously.
-- ISR reads latest smoothed audio sample from this unified DMA stream.
-- Pot mux switching, settle discard, and pot averaging are handled inside the unified ADC subsystem.
+- One ADC+DMA sampler round-robins ADC0 (pot mux) and ADC1 (audio input) continuously.
+- ISR reads the latest smoothed audio sample from that stream.
+- Pot mux switching, settle discard, and pot averaging are handled inside the engine ADC section.
 
 ### DSP Path (ISR)
 
@@ -137,7 +137,7 @@ Useful constants for sound/behavior tuning:
 
 DMA input specifics:
 
-- Unified ADC DMA ring size: `256` samples
+- ADC DMA ring size: `256` samples
 - Audio averaging taps: `4` samples
 - Pot settle discard after mux switch: `6` samples
 
@@ -145,9 +145,7 @@ DMA input specifics:
 
 - `main.cpp`: entrypoint
 - `src/delay_app.h/.cpp`: UI, controls, LEDs, parameter mapping, app loop
-- `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line
-- `src/unified_adc_dma.h/.cpp`: unified ADC DMA (audio + pot-mux scheduler)
-- `src/fast_dac_out.h/.cpp`: fast SPI DAC writes and output coupling setup
+- `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line + ADC/DMA + DAC path
 - `brain-sdk/`: Brain SDK submodule
 
 ## Known Scope and Limitations (Current Release)

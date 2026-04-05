@@ -113,6 +113,7 @@ bool DelayApp::init() {
 	return true;
 }
 
+// Main non-audio loop: UI polling, control updates, and LED updates.
 void DelayApp::run() {
 	uint32_t last_control_us = time_us_32();
 	uint32_t last_debug_us = last_control_us;
@@ -289,8 +290,9 @@ uint32_t DelayApp::tempo_pulse_interval_us(float delay_ms) const {
 		interval_us, kTempoPulseMinIntervalUs, kTempoPulseMaxIntervalUs);
 }
 
+// Convert control state into smoothed DelayParams for the ISR.
 void DelayApp::update_control_params() {
-	// UnifiedAdcDma already handles mux settle/averaging; here we only consume snapshots.
+	// The engine ADC sampler already handles mux settle/averaging; here we only consume snapshots.
 	read_all_pots();
 
 	const auto apply_deadband = [](uint16_t incoming, uint16_t current, uint8_t deadband) -> uint16_t {
@@ -348,6 +350,7 @@ void DelayApp::update_control_params() {
 	engine_.set_params(params);
 }
 
+// Read current 8-bit pot snapshots from the engine ADC sampler.
 void DelayApp::read_all_pots() {
 	for (uint8_t i = 0; i < kPotCount; i++) {
 		pot_values_[i] = engine_.read_pot_raw_u8(i);

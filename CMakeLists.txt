@@ -31,8 +31,6 @@ add_subdirectory(brain-sdk)
 
 add_executable(lo-fi-delay
 	main.cpp
-	src/unified_adc_dma.cpp
-	src/fast_dac_out.cpp
 	src/delay_engine.cpp
 	src/delay_app.cpp
 )
