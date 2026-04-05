@@ -38,8 +38,9 @@ class DelayEngine {
 	static const uint32_t kMaxDelaySamples = 24000;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
-	static const uint32_t kDelaySlewQ16PerSample = (1u << 14);
+	static const uint32_t kDelaySlewQ16PerSample = (1u << 12);
 	static const uint8_t kUnlockBlendSamples = 24;
+	static const uint8_t kOutputTransitionSamples = 16;
 	static constexpr AudioTestMode kTestMode = AudioTestMode::kNormal;
 	static const int16_t kDcBlockCoeffQ15 = 32604;	// ~0.995
 
@@ -81,7 +82,11 @@ class DelayEngine {
 	int16_t dc_block_x_prev_;
 	int32_t dc_block_y_prev_;
 	int16_t prev_input_raw_sample_;
+	int16_t prev_delayed_sample_;
+	int16_t prev_output_sample_;
+	int16_t output_transition_from_sample_;
 	int16_t lock_hold_sample_;
+	uint8_t output_transition_remaining_;
 	uint8_t unlock_blend_remaining_;
 	bool was_control_locked_;
 

@@ -3,6 +3,7 @@
 Digital mono delay firmware for the Shmoergh Brain platform, optimized for stable interrupt-driven audio with DMA-based ADC input.
 
 Current release target: **Pico 2 only** (`rp2350-arm-s`).
+SDK baseline: **Brain SDK 2.0** (UI/control via `Brain` wrapper).
 
 ## What This Firmware Does
 
@@ -25,7 +26,7 @@ Current release target: **Pico 2 only** (`rp2350-arm-s`).
 - `Pot 2`: feedback amount, clamped to max `0.92`.
 - `Pot 3`: wet/dry mix (`0.0` dry to `1.0` wet).
 - `Button A` short taps: tap tempo.
-- `Button A` long press (`~700 ms`): clear delay buffer.
+- `Button A` long press (`~500 ms`): clear delay buffer.
 - `Button B` hold: freeze delay write path (loop hold); release resumes normal recording.
 
 Tap tempo uses pickup behavior:
@@ -158,7 +159,8 @@ DMA input specifics:
 
 ```bash
 cd brain-sdk
-git pull origin main
+git checkout 2.0
+git pull origin 2.0
 cd ..
 git add brain-sdk
 git commit -m "Update brain-sdk"

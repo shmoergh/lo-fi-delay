@@ -6,7 +6,7 @@
 #include <hardware/dma.h>
 #include <hardware/sync.h>
 
-#include "brain-common/brain-gpio-setup.h"
+#include "brain/include/gpio-setup.h"
 
 namespace firmware {
 

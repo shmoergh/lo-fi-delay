@@ -16,8 +16,8 @@ echo ""
 
 cd brain-sdk
 git fetch origin
-git checkout main
-git pull origin main
+git checkout 2.0
+git pull origin 2.0
 cd ..
 
 echo ""

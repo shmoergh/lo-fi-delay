@@ -18,6 +18,8 @@ project(lo-fi-delay C CXX ASM)
 
 # Reserve SDK-managed storage sectors (app blob + calibration [+ RP2350 guard])
 # before Pico SDK initialization so linker flash size is adjusted safely.
+set(BRAIN_STORAGE_ENABLE_FLASH_RESERVATION ON CACHE BOOL "" FORCE)
+set(BRAIN_STORAGE_ALLOW_UNPROTECTED_LAYOUT OFF CACHE BOOL "" FORCE)
 include(brain-sdk/cmake/brain-storage-reserve-flash.cmake)
 brain_storage_configure_flash_reservation()
 
@@ -39,14 +41,20 @@ target_include_directories(lo-fi-delay PRIVATE
 	src
 )
 
+target_compile_definitions(lo-fi-delay PRIVATE
+	BRAIN_USE_LEDS=1
+	BRAIN_USE_BUTTONS=1
+)
+
 target_link_libraries(lo-fi-delay
 	pico_stdlib
-	brain-common
-	brain-ui
-	brain-io
-	brain-utils
+	brain
 	hardware_adc
-	hardware_dma)
+	hardware_dma
+	hardware_gpio
+	hardware_spi
+	hardware_sync
+)
 
 pico_enable_stdio_usb(lo-fi-delay 1)
 pico_enable_stdio_uart(lo-fi-delay 1)

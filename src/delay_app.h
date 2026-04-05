@@ -2,10 +2,7 @@
 
 #include <cstdint>
 
-#include "brain-ui/button-led.h"
-#include "brain-ui/button.h"
-#include "brain-ui/leds.h"
-#include "brain-ui/pots.h"
+#include "brain/brain.h"
 #include "delay_engine.h"
 
 namespace firmware {
@@ -25,13 +22,16 @@ class DelayApp {
 	static const uint32_t kPotActivityHoldUs = 1400000;
 	static const uint8_t kPotActivityDetectThreshold = 2;
 	static const uint32_t kDebugIntervalUs = 300000;
-	static const bool kEnableLogging = false;
+	static const bool kEnableLogging = true;
 	static const uint32_t kLedUpdateIntervalUs = 20000;
-	static const uint32_t kButtonLongPressMs = 700;
 	static const uint16_t kTapPickupThreshold = 64;
 	static const uint32_t kTapMinMs = 80;
 	static const bool kEnableTapTempo = true;
+	static const bool kEnableTempoPulseLed = true;
+	static const bool kEnablePotPolling = true;
 	static const uint16_t kPotMaxRaw = 255;
+	static const uint32_t kPotMuxSettleUs = 5;
+	static const uint8_t kPotReadAverageTaps = 1;
 	static constexpr float kMinDelayMs = 30.0f;
 	static constexpr float kMaxDelayMs = 1000.0f;
 
@@ -39,7 +39,9 @@ class DelayApp {
 	static const uint8_t kPotDeadbandFeedback = 1;
 	static const uint8_t kPotDeadbandMix = 1;
 	static constexpr float kDelaySmoothingAlpha = 0.08f;
-	static const uint8_t kPanelLedCount = brain::ui::NO_OF_LEDS;
+	static constexpr float kFeedbackSmoothingAlpha = 0.18f;
+	static constexpr float kMixSmoothingAlpha = 0.18f;
+	static const uint8_t kPanelLedCount = NO_OF_LEDS;
 	static const uint32_t kTempoPulseOnUs = 42000;
 	static const uint32_t kTempoPulseMinIntervalUs = 120000;
 	static const uint32_t kTempoPulseMaxIntervalUs = 1200000;
@@ -52,6 +54,8 @@ class DelayApp {
 	void on_freeze_release();
 	void update_panel_leds(uint32_t now_us);
 	uint32_t tempo_pulse_interval_us(float delay_ms) const;
+	void init_pots_hw();
+	uint16_t read_pot_raw_u8(uint8_t pot_index) const;
 
 	void update_control_params();
 	float map_time_pot_to_ms(uint16_t raw) const;
@@ -59,18 +63,15 @@ class DelayApp {
 	int16_t to_q15(float norm01) const;
 	uint32_t delay_ms_to_samples(float delay_ms) const;
 
-	brain::ui::Button button_tap_clear_;
-	brain::ui::Button button_freeze_;
-	brain::ui::ButtonLed button_led_;
-	brain::ui::Leds panel_leds_;
-
-	brain::ui::Pots pots_;
+	Brain brain_;
 	DelayEngine engine_;
 
 	uint16_t pot_values_[kPotCount];
 	uint16_t stable_pot_values_[kPotCount];
 	uint8_t next_pot_index_;
 	float smoothed_delay_ms_;
+	float smoothed_feedback_norm_;
+	float smoothed_mix_norm_;
 	uint32_t last_pot_read_us_;
 	uint32_t pot_active_until_us_;
 	uint32_t last_led_update_us_;

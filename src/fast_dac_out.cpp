@@ -3,7 +3,7 @@
 #include <hardware/gpio.h>
 #include <hardware/spi.h>
 
-#include "brain-common/brain-gpio-setup.h"
+#include "brain/include/gpio-setup.h"
 
 namespace firmware {
 

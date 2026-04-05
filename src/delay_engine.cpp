@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-#include "brain-common/brain-common.h"
+#include "brain/include/common.h"
 
 namespace firmware {
 
@@ -42,11 +42,11 @@ int16_t soft_clip_i16(int32_t v) {
 }
 
 const int32_t kInputLowRaw = static_cast<int32_t>(
-	(brain::constants::kAudioCvInVoltageAtMinus5V / brain::constants::kAdcVoltageRef) *
-	brain::constants::kAdcMaxValue);
+	(kAudioCvInVoltageAtMinus5V / kAdcVoltageRef) *
+	kAdcMaxValue);
 const int32_t kInputHighRaw = static_cast<int32_t>(
-	(brain::constants::kAudioCvInVoltageAtPlus5V / brain::constants::kAdcVoltageRef) *
-	brain::constants::kAdcMaxValue);
+	(kAudioCvInVoltageAtPlus5V / kAdcVoltageRef) *
+	kAdcMaxValue);
 const int32_t kInputMidRaw = (kInputLowRaw + kInputHighRaw) / 2;
 const int32_t kInputHalfSpanRaw = ((kInputHighRaw - kInputLowRaw) > 0)
 	? ((kInputHighRaw - kInputLowRaw) / 2)
@@ -83,7 +83,11 @@ DelayEngine::DelayEngine() :
 	dc_block_x_prev_(0),
 	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
+	prev_delayed_sample_(0),
+	prev_output_sample_(0),
+	output_transition_from_sample_(0),
 	lock_hold_sample_(0),
+	output_transition_remaining_(0),
 	unlock_blend_remaining_(0),
 	was_control_locked_(false),
 	write_index_(0),
@@ -116,7 +120,11 @@ bool DelayEngine::init() {
 	dc_block_x_prev_ = 0;
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
+	prev_delayed_sample_ = 0;
+	prev_output_sample_ = 0;
+	output_transition_from_sample_ = 0;
 	lock_hold_sample_ = 0;
+	output_transition_remaining_ = 0;
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
 	last_audio_adc_raw_ = 2048;
@@ -158,7 +166,11 @@ void DelayEngine::clear_and_restart() {
 	dc_block_x_prev_ = 0;
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
+	prev_delayed_sample_ = 0;
+	prev_output_sample_ = 0;
+	output_transition_from_sample_ = 0;
 	lock_hold_sample_ = 0;
+	output_transition_remaining_ = 0;
 	unlock_blend_remaining_ = 0;
 	was_control_locked_ = false;
 	last_audio_adc_raw_ = 2048;
@@ -243,20 +255,27 @@ bool DelayEngine::process_audio_tick() {
 	const uint32_t target_delay_samples =
 		clamp_value<uint32_t>(params.delay_samples, 1, kMaxDelaySamples - 2);
 	const uint32_t target_delay_q16 = target_delay_samples << 16;
+	bool delay_slewing = false;
 	if (current_delay_q16_ < target_delay_q16) {
 		const uint32_t delta = target_delay_q16 - current_delay_q16_;
 		const uint32_t step = (delta > kDelaySlewQ16PerSample) ? kDelaySlewQ16PerSample : delta;
 		current_delay_q16_ += step;
+		delay_slewing = true;
 	} else if (current_delay_q16_ > target_delay_q16) {
 		const uint32_t delta = current_delay_q16_ - target_delay_q16;
 		const uint32_t step = (delta > kDelaySlewQ16PerSample) ? kDelaySlewQ16PerSample : delta;
 		current_delay_q16_ -= step;
+		delay_slewing = true;
 	}
 	uint32_t delay_int = current_delay_q16_ >> 16;
 	delay_int = clamp_value<uint32_t>(delay_int, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 
 	const bool control_locked = control_adc_locked_;
+	if (was_control_locked_ != control_locked) {
+		output_transition_from_sample_ = prev_output_sample_;
+		output_transition_remaining_ = kOutputTransitionSamples;
+	}
 	if (was_control_locked_ && !control_locked) {
 		unlock_blend_remaining_ = kUnlockBlendSamples;
 	}
@@ -311,7 +330,13 @@ bool DelayEngine::process_audio_tick() {
 		((static_cast<int64_t>(delayed_a) * static_cast<int64_t>(65536u - frac_q16)) +
 			(static_cast<int64_t>(delayed_b) * static_cast<int64_t>(frac_q16))) >>
 		16);
-	const int16_t delayed_sample = clamp_i16(delayed_interp);
+	int16_t delayed_sample = clamp_i16(delayed_interp);
+	if (delay_slewing) {
+		// Smooth moving-readhead zipper artifacts while delay time is changing.
+		delayed_sample = clamp_i16(
+			(static_cast<int32_t>(delayed_sample) + static_cast<int32_t>(prev_delayed_sample_)) / 2);
+	}
+	prev_delayed_sample_ = delayed_sample;
 
 	const int32_t tone_lp = tone_lp_q15_ +
 		((static_cast<int32_t>(params.tone_q15) *
@@ -321,7 +346,10 @@ bool DelayEngine::process_audio_tick() {
 	const int16_t tone_sample = clamp_i16(tone_lp);
 
 	int16_t write_sample = 0;
-	if (params.freeze) {
+	const bool suppress_write_input = control_locked || (unlock_blend_remaining_ > 0);
+	if (params.freeze || suppress_write_input) {
+		// Do not inject control-lock transients into the delay line; otherwise
+		// they repeat at the current delay time via feedback.
 		write_sample = delayed_sample;
 	} else {
 		const int32_t feedback_part =
@@ -340,7 +368,17 @@ bool DelayEngine::process_audio_tick() {
 		15;
 	const int32_t wet_part =
 		(static_cast<int32_t>(delayed_sample) * static_cast<int32_t>(params.mix_q15)) >> 15;
-	const int16_t output_sample = clamp_i16(dry_part + wet_part);
+	int16_t output_sample = clamp_i16(dry_part + wet_part);
+	if (output_transition_remaining_ > 0) {
+		const uint16_t total = kOutputTransitionSamples;
+		const uint16_t step = static_cast<uint16_t>(total - output_transition_remaining_ + 1);
+		const int32_t from_part =
+			static_cast<int32_t>(output_transition_from_sample_) * static_cast<int32_t>(total - step);
+		const int32_t to_part = static_cast<int32_t>(output_sample) * static_cast<int32_t>(step);
+		output_sample = clamp_i16((from_part + to_part) / static_cast<int32_t>(total));
+		output_transition_remaining_--;
+	}
+	prev_output_sample_ = output_sample;
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
 	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
