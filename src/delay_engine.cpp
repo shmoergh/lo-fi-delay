@@ -165,10 +165,6 @@ DelayParams DelayEngine::get_params() const {
 	return copy;
 }
 
-uint32_t DelayEngine::get_overrun_count() const {
-	return isr_overrun_count_;
-}
-
 DelayStats DelayEngine::get_stats() const {
 	const uint32_t irq_state = save_and_disable_interrupts();
 	DelayStats stats{};
@@ -215,6 +211,7 @@ bool DelayEngine::process_audio_tick() {
 		const uint32_t step = (delta > kDelaySlewQ16PerSample) ? kDelaySlewQ16PerSample : delta;
 		current_delay_q16_ -= step;
 	}
+	const bool delay_slewing = (current_delay_q16_ != target_delay_q16);
 
 	uint16_t adc_raw = last_audio_adc_raw_;
 	unified_adc_dma_.poll();
@@ -241,7 +238,7 @@ bool DelayEngine::process_audio_tick() {
 		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
 		return true;
 	}
-	const int16_t output_sample = process_sample(params, input_sample);
+	const int16_t output_sample = process_sample(params, input_sample, delay_slewing);
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
 	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
@@ -249,10 +246,12 @@ bool DelayEngine::process_audio_tick() {
 	return true;
 }
 
-int16_t DelayEngine::process_sample(const DelayParams& params, int16_t input_sample) {
+int16_t DelayEngine::process_sample(
+	const DelayParams& params,
+	int16_t input_sample,
+	bool delay_slewing) {
 	const uint32_t delay_int = clamp_value<uint32_t>(current_delay_q16_ >> 16, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
-	const bool delay_slewing = (current_delay_q16_ != (params.delay_samples << 16));
 
 	const uint32_t read_index_a = (write_index_ + kMaxDelaySamples - delay_int) % kMaxDelaySamples;
 	const uint32_t read_index_b =

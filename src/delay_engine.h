@@ -51,14 +51,13 @@ class DelayEngine {
 	DelayParams get_params() const;
 	uint16_t read_pot_raw_u8(uint8_t pot_index) const;
 
-	uint32_t get_overrun_count() const;
 	DelayStats get_stats() const;
 	float sample_rate_hz() const;
 
 	private:
 	static bool timer_callback(repeating_timer* timer);
 	bool process_audio_tick();
-	int16_t process_sample(const DelayParams& params, int16_t input_sample);
+	int16_t process_sample(const DelayParams& params, int16_t input_sample, bool delay_slewing);
 
 	static DelayEngine* instance_;
 

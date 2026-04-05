@@ -33,15 +33,17 @@ class UnifiedAdcDma {
 	static const uint16_t kPotSamplesPerHold = 64;
 	static const uint8_t kPotDiscardAfterSwitch = 6;
 	static const uint32_t kRingSampleCount = 256;
+	// Keep ISR time predictable by processing only a bounded number of samples per audio tick.
+	static const uint32_t kMaxSamplesPerPoll = 16;
 	static const uint32_t kDmaTransferCount = 0xFFFFFFFFu;
 	static const uint32_t kRingBufferBytes = kRingSampleCount * sizeof(uint16_t);
 	static const uint8_t kRingWrapBits = 9;  // 2^9 = 512 bytes
 
 	void configure_adc_clock(float audio_sample_rate_hz);
-	void start_streaming_locked();
-	void process_audio_sample_locked(uint16_t raw_u12);
-	void process_pot_sample_locked(uint16_t raw_u12);
-	void set_active_pot_mux_locked(uint8_t pot_index);
+	void start_streaming();
+	void process_audio_sample(uint16_t raw_u12);
+	void process_pot_sample(uint16_t raw_u12);
+	void set_active_pot_mux(uint8_t pot_index);
 
 	int dma_channel_;
 	bool initialized_;

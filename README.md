@@ -56,7 +56,6 @@ Tap tempo uses pickup behavior:
 ### DSP Path (ISR)
 
 - Convert ADC raw -> centered signed audio sample.
-- Apply control-lock handoff blend to reduce release artifacts.
 - Apply 1-pole DC blocker (always on).
 - Apply short input averaging (always on).
 - Interpolated delay read (fractional delay using Q16 interpolation).

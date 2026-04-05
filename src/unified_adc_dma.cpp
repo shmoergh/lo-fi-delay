@@ -54,7 +54,7 @@ bool UnifiedAdcDma::init(float audio_sample_rate_hz) {
 	gpio_set_dir(GPIO_BRAIN_POTMUX_S0, GPIO_OUT);
 	gpio_init(GPIO_BRAIN_POTMUX_S1);
 	gpio_set_dir(GPIO_BRAIN_POTMUX_S1, GPIO_OUT);
-	set_active_pot_mux_locked(0);
+	set_active_pot_mux(0);
 
 	configure_adc_clock(audio_sample_rate_hz);
 	adc_fifo_setup(
@@ -100,7 +100,7 @@ bool UnifiedAdcDma::start() {
 	}
 	audio_history_index_ = 0;
 
-	start_streaming_locked();
+	start_streaming();
 	running_ = true;
 	restore_interrupts(irq_state);
 	return true;
@@ -129,15 +129,20 @@ void UnifiedAdcDma::poll() {
 	const uintptr_t byte_offset = (write_addr - base) & (kRingBufferBytes - 1u);
 	const uint32_t next_index = static_cast<uint32_t>(byte_offset >> 1);
 
+	uint32_t processed_samples = 0;
 	while (dma_read_index_ != next_index) {
 		const uint16_t raw_u12 = static_cast<uint16_t>(ring_buffer_[dma_read_index_] & 0x0FFFu);
 		if (expect_pot_sample_) {
-			process_pot_sample_locked(raw_u12);
+			process_pot_sample(raw_u12);
 		} else {
-			process_audio_sample_locked(raw_u12);
+			process_audio_sample(raw_u12);
 		}
 		expect_pot_sample_ = !expect_pot_sample_;
 		dma_read_index_ = (dma_read_index_ + 1u) & (kRingSampleCount - 1u);
+		processed_samples++;
+		if (processed_samples >= kMaxSamplesPerPoll) {
+			break;
+		}
 	}
 }
 
@@ -168,8 +173,8 @@ void UnifiedAdcDma::configure_adc_clock(float audio_sample_rate_hz) {
 	adc_set_clkdiv(divisor);
 }
 
-void UnifiedAdcDma::start_streaming_locked() {
-	set_active_pot_mux_locked(0);
+void UnifiedAdcDma::start_streaming() {
+	set_active_pot_mux(0);
 	adc_set_round_robin((1u << kPotAdcChannel) | (1u << kAudioAdcChannel));
 	adc_select_input(kPotAdcChannel);
 	adc_fifo_drain();
@@ -194,7 +199,7 @@ void UnifiedAdcDma::start_streaming_locked() {
 	dma_channel_start(static_cast<uint>(dma_channel_));
 }
 
-void UnifiedAdcDma::process_audio_sample_locked(uint16_t raw_u12) {
+void UnifiedAdcDma::process_audio_sample(uint16_t raw_u12) {
 	audio_history_sum_ -= audio_history_[audio_history_index_];
 	audio_history_[audio_history_index_] = raw_u12;
 	audio_history_sum_ += raw_u12;
@@ -202,7 +207,7 @@ void UnifiedAdcDma::process_audio_sample_locked(uint16_t raw_u12) {
 	held_audio_raw_u12_ = static_cast<uint16_t>(audio_history_sum_ / kAudioAverageTaps);
 }
 
-void UnifiedAdcDma::process_pot_sample_locked(uint16_t raw_u12) {
+void UnifiedAdcDma::process_pot_sample(uint16_t raw_u12) {
 	if (pot_discard_remaining_ > 0) {
 		pot_discard_remaining_--;
 		pot_settle_discard_count_++;
@@ -221,12 +226,12 @@ void UnifiedAdcDma::process_pot_sample_locked(uint16_t raw_u12) {
 	pot_accumulator_count_ = 0;
 
 	const uint8_t next_pot = static_cast<uint8_t>((active_pot_index_ + 1u) % kPotCount);
-	set_active_pot_mux_locked(next_pot);
+	set_active_pot_mux(next_pot);
 	pot_discard_remaining_ = kPotDiscardAfterSwitch;
 	pot_mux_switch_count_++;
 }
 
-void UnifiedAdcDma::set_active_pot_mux_locked(uint8_t pot_index) {
+void UnifiedAdcDma::set_active_pot_mux(uint8_t pot_index) {
 	active_pot_index_ = static_cast<uint8_t>(pot_index % kPotCount);
 	gpio_put(GPIO_BRAIN_POTMUX_S0, active_pot_index_ & 0x01u);
 	gpio_put(GPIO_BRAIN_POTMUX_S1, (active_pot_index_ >> 1) & 0x01u);
