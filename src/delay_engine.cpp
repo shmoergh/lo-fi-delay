@@ -7,10 +7,6 @@
 
 #include "brain/include/common.h"
 
-#ifndef LFD_ENABLE_CCARD_SPIKE
-#define LFD_ENABLE_CCARD_SPIKE 0
-#endif
-
 namespace firmware {
 
 namespace {
@@ -76,24 +72,12 @@ DelayEngine* DelayEngine::instance_ = nullptr;
 DelayEngine::DelayEngine() :
 	running_(false),
 	isr_overrun_count_(0),
-	control_adc_locked_(false),
 	audio_tick_count_(0),
-	adc_stale_sample_count_(0),
-	control_lock_events_(0),
-	control_lock_total_us_(0),
-	control_lock_max_us_(0),
-	control_lock_started_us_(0),
 	last_audio_adc_raw_(2048),
 	dc_block_x_prev_(0),
 	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
 	prev_delayed_sample_(0),
-	prev_output_sample_(0),
-	output_transition_from_sample_(0),
-	lock_hold_sample_(0),
-	output_transition_remaining_(0),
-	unlock_blend_remaining_(0),
-	was_control_locked_(false),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
 	tone_lp_q15_(0) {
@@ -116,32 +100,15 @@ bool DelayEngine::init() {
 	tone_lp_q15_ = 0;
 	isr_overrun_count_ = 0;
 	audio_tick_count_ = 0;
-	adc_stale_sample_count_ = 0;
-	control_lock_events_ = 0;
-	control_lock_total_us_ = 0;
-	control_lock_max_us_ = 0;
-	control_lock_started_us_ = 0;
 	dc_block_x_prev_ = 0;
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
 	prev_delayed_sample_ = 0;
-	prev_output_sample_ = 0;
-	output_transition_from_sample_ = 0;
-	lock_hold_sample_ = 0;
-	output_transition_remaining_ = 0;
-	unlock_blend_remaining_ = 0;
-	was_control_locked_ = false;
 	last_audio_adc_raw_ = 2048;
 
-#if LFD_ENABLE_CCARD_SPIKE
 	if (!unified_adc_dma_.init(sample_rate_hz())) {
 		return false;
 	}
-#else
-	if (!audio_input_dma_.init(sample_rate_hz() * 6.0f)) {
-		return false;
-	}
-#endif
 
 	instance_ = this;
 	return true;
@@ -149,22 +116,12 @@ bool DelayEngine::init() {
 
 bool DelayEngine::start() {
 	if (running_) return true;
-#if LFD_ENABLE_CCARD_SPIKE
 	if (!unified_adc_dma_.start()) {
 		return false;
 	}
-#else
-	if (!audio_input_dma_.start()) {
-		return false;
-	}
-#endif
 	running_ = add_repeating_timer_us(-kAudioPeriodUs, DelayEngine::timer_callback, nullptr, &timer_);
 	if (!running_) {
-#if LFD_ENABLE_CCARD_SPIKE
 		unified_adc_dma_.stop();
-#else
-		audio_input_dma_.stop();
-#endif
 	}
 	return running_;
 }
@@ -174,11 +131,7 @@ void DelayEngine::stop() {
 		cancel_repeating_timer(&timer_);
 		running_ = false;
 	}
-#if LFD_ENABLE_CCARD_SPIKE
 	unified_adc_dma_.stop();
-#else
-	audio_input_dma_.stop();
-#endif
 }
 
 void DelayEngine::clear_and_restart() {
@@ -191,12 +144,6 @@ void DelayEngine::clear_and_restart() {
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
 	prev_delayed_sample_ = 0;
-	prev_output_sample_ = 0;
-	output_transition_from_sample_ = 0;
-	lock_hold_sample_ = 0;
-	output_transition_remaining_ = 0;
-	unlock_blend_remaining_ = 0;
-	was_control_locked_ = false;
 	last_audio_adc_raw_ = 2048;
 	start();
 }
@@ -207,41 +154,8 @@ void DelayEngine::set_params(const DelayParams& params) {
 	restore_interrupts(irq_state);
 }
 
-void DelayEngine::set_control_adc_lock(bool locked) {
-#if LFD_ENABLE_CCARD_SPIKE
-	(void) locked;
-	control_adc_locked_ = false;
-#else
-	const uint32_t irq_state = save_and_disable_interrupts();
-
-	const uint32_t now_us = time_us_32();
-	if (locked) {
-		if (!control_adc_locked_) {
-			control_lock_started_us_ = now_us;
-			audio_input_dma_.pause_for_control();
-		}
-	} else if (control_adc_locked_) {
-		const uint32_t held_us = now_us - control_lock_started_us_;
-		control_lock_events_++;
-		control_lock_total_us_ += held_us;
-		if (held_us > control_lock_max_us_) {
-			control_lock_max_us_ = held_us;
-		}
-		audio_input_dma_.resume_after_control();
-	}
-
-	control_adc_locked_ = locked;
-	restore_interrupts(irq_state);
-#endif
-}
-
 uint16_t DelayEngine::read_pot_raw_u8(uint8_t pot_index) const {
-#if LFD_ENABLE_CCARD_SPIKE
 	return unified_adc_dma_.pot_raw_u8(pot_index);
-#else
-	(void) pot_index;
-	return 0;
-#endif
 }
 
 DelayParams DelayEngine::get_params() const {
@@ -259,18 +173,9 @@ DelayStats DelayEngine::get_stats() const {
 	const uint32_t irq_state = save_and_disable_interrupts();
 	DelayStats stats{};
 	stats.audio_tick_count = audio_tick_count_;
-	stats.adc_stale_sample_count = adc_stale_sample_count_;
-	stats.control_lock_events = control_lock_events_;
-	stats.control_lock_total_us = control_lock_total_us_;
-	stats.control_lock_max_us = control_lock_max_us_;
-#if LFD_ENABLE_CCARD_SPIKE
 	const UnifiedAdcStats adc_stats = unified_adc_dma_.get_stats();
 	stats.pot_mux_switch_count = adc_stats.pot_mux_switch_count;
 	stats.pot_settle_discard_count = adc_stats.pot_settle_discard_count;
-#else
-	stats.pot_mux_switch_count = 0;
-	stats.pot_settle_discard_count = 0;
-#endif
 	stats.overrun_count = isr_overrun_count_;
 	restore_interrupts(irq_state);
 	return stats;
@@ -311,42 +216,12 @@ bool DelayEngine::process_audio_tick() {
 		current_delay_q16_ -= step;
 	}
 
-	const bool control_locked = control_adc_locked_;
-	if (was_control_locked_ != control_locked) {
-		output_transition_from_sample_ = prev_output_sample_;
-		output_transition_remaining_ = kOutputTransitionSamples;
-	}
-	if (was_control_locked_ && !control_locked) {
-		unlock_blend_remaining_ = kUnlockBlendSamples;
-	}
-	was_control_locked_ = control_locked;
-
 	uint16_t adc_raw = last_audio_adc_raw_;
-#if LFD_ENABLE_CCARD_SPIKE
 	unified_adc_dma_.poll();
 	adc_raw = unified_adc_dma_.latest_audio_raw_u12();
 	last_audio_adc_raw_ = adc_raw;
-#else
-	if (!control_locked) {
-		adc_raw = audio_input_dma_.latest_raw_u12();
-		last_audio_adc_raw_ = adc_raw;
-	} else {
-		adc_stale_sample_count_++;
-	}
-#endif
 	int16_t input_sample = adc_to_audio_sample(adc_raw);
-	if (control_locked) {
-		lock_hold_sample_ = input_sample;
-	} else if (unlock_blend_remaining_ > 0) {
-		const uint16_t blend_total = kUnlockBlendSamples;
-		const uint16_t progressed = blend_total - unlock_blend_remaining_;
-		const int32_t hold_part = static_cast<int32_t>(lock_hold_sample_) *
-			static_cast<int32_t>(blend_total - progressed);
-		const int32_t live_part =
-			static_cast<int32_t>(input_sample) * static_cast<int32_t>(progressed);
-		input_sample = clamp_i16((hold_part + live_part) / static_cast<int32_t>(blend_total));
-		unlock_blend_remaining_--;
-	}
+
 	// 1-pole high-pass: y[n] = x[n] - x[n-1] + a * y[n-1]
 	const int32_t x = static_cast<int32_t>(input_sample);
 	const int32_t y = (x - static_cast<int32_t>(dc_block_x_prev_)) +
@@ -366,8 +241,7 @@ bool DelayEngine::process_audio_tick() {
 		mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
 		return true;
 	}
-	const int16_t output_sample = process_sample(params, input_sample, control_locked);
-	prev_output_sample_ = output_sample;
+	const int16_t output_sample = process_sample(params, input_sample);
 
 	dac_.write_channel_a_raw(sample_to_dac_u12(output_sample));
 	mark_overrun_if_needed(isr_overrun_count_, tick_start_us, kAudioPeriodUs);
@@ -375,7 +249,7 @@ bool DelayEngine::process_audio_tick() {
 	return true;
 }
 
-int16_t DelayEngine::process_sample(const DelayParams& params, int16_t input_sample, bool control_locked) {
+int16_t DelayEngine::process_sample(const DelayParams& params, int16_t input_sample) {
 	const uint32_t delay_int = clamp_value<uint32_t>(current_delay_q16_ >> 16, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 	const bool delay_slewing = (current_delay_q16_ != (params.delay_samples << 16));
@@ -405,8 +279,7 @@ int16_t DelayEngine::process_sample(const DelayParams& params, int16_t input_sam
 	const int16_t tone_sample = clamp_i16(tone_lp);
 
 	int16_t write_sample = 0;
-	const bool suppress_write_input = control_locked || (unlock_blend_remaining_ > 0);
-	if (params.freeze || suppress_write_input) {
+	if (params.freeze) {
 		write_sample = delayed_sample;
 	} else {
 		const int32_t feedback_part =
@@ -425,18 +298,7 @@ int16_t DelayEngine::process_sample(const DelayParams& params, int16_t input_sam
 		15;
 	const int32_t wet_part =
 		(static_cast<int32_t>(delayed_sample) * static_cast<int32_t>(params.mix_q15)) >> 15;
-	int16_t output_sample = clamp_i16(dry_part + wet_part);
-	if (output_transition_remaining_ > 0) {
-		const uint16_t total = kOutputTransitionSamples;
-		const uint16_t step = static_cast<uint16_t>(total - output_transition_remaining_ + 1);
-		const int32_t from_part =
-			static_cast<int32_t>(output_transition_from_sample_) * static_cast<int32_t>(total - step);
-		const int32_t to_part = static_cast<int32_t>(output_sample) * static_cast<int32_t>(step);
-		output_sample = clamp_i16((from_part + to_part) / static_cast<int32_t>(total));
-		output_transition_remaining_--;
-	}
-
-	return output_sample;
+	return clamp_i16(dry_part + wet_part);
 }
 
 }  // namespace firmware

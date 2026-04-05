@@ -16,8 +16,6 @@ include(brain-sdk/pico_sdk_import.cmake)
 
 project(lo-fi-delay C CXX ASM)
 
-option(LFD_ENABLE_CCARD_SPIKE "Enable ComputerCard-style A/B spike path" ON)
-
 # Reserve SDK-managed storage sectors (app blob + calibration [+ RP2350 guard])
 # before Pico SDK initialization so linker flash size is adjusted safely.
 set(BRAIN_STORAGE_ENABLE_FLASH_RESERVATION ON CACHE BOOL "" FORCE)
@@ -33,7 +31,6 @@ add_subdirectory(brain-sdk)
 
 add_executable(lo-fi-delay
 	main.cpp
-	src/audio_input_dma.cpp
 	src/unified_adc_dma.cpp
 	src/fast_dac_out.cpp
 	src/delay_engine.cpp
@@ -47,8 +44,6 @@ target_include_directories(lo-fi-delay PRIVATE
 target_compile_definitions(lo-fi-delay PRIVATE
 	BRAIN_USE_LEDS=1
 	BRAIN_USE_BUTTONS=1
-	$<$<BOOL:${LFD_ENABLE_CCARD_SPIKE}>:LFD_ENABLE_CCARD_SPIKE=1>
-	$<$<NOT:$<BOOL:${LFD_ENABLE_CCARD_SPIKE}>>:LFD_ENABLE_CCARD_SPIKE=0>
 )
 
 target_link_libraries(lo-fi-delay

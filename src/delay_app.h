@@ -30,8 +30,6 @@ class DelayApp {
 	static const bool kEnableTempoPulseLed = true;
 	static const bool kEnablePotPolling = true;
 	static const uint16_t kPotMaxRaw = 255;
-	static const uint32_t kPotMuxSettleUs = 5;
-	static const uint8_t kPotReadAverageTaps = 1;
 	static constexpr float kMinDelayMs = 30.0f;
 	static constexpr float kMaxDelayMs = 1000.0f;
 
@@ -54,8 +52,6 @@ class DelayApp {
 	void on_freeze_release();
 	void update_panel_leds(uint32_t now_us);
 	uint32_t tempo_pulse_interval_us(float delay_ms) const;
-	void init_pots_hw();
-	uint16_t read_pot_raw_u8(uint8_t pot_index) const;
 
 	void update_control_params();
 	float map_time_pot_to_ms(uint16_t raw) const;

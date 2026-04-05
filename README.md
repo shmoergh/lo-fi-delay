@@ -49,10 +49,9 @@ Tap tempo uses pickup behavior:
 
 ### Input Path
 
-- ADC input is captured by DMA (`AudioInputDma`) into a ring buffer.
-- ISR reads latest DMA sample (`latest_raw_u12()`), not direct ADC conversion.
-- Control reads (pots) temporarily lock/pause DMA safely, then resume with a short settle strategy.
-- Spike mode (`LFD_ENABLE_CCARD_SPIKE=ON`) uses a unified round-robin ADC DMA owner (ADC0 pot-mux + ADC1 audio), so lock/pause-resume handoff is bypassed.
+- Unified ADC DMA round-robin samples ADC0 (pot mux) and ADC1 (audio input) continuously.
+- ISR reads latest smoothed audio sample from this unified DMA stream.
+- Pot mux switching, settle discard, and pot averaging are handled inside the unified ADC subsystem.
 
 ### DSP Path (ISR)
 
@@ -96,21 +95,9 @@ This builds the Pico 2 target and copies UF2 artifact to repo root:
 
 - `lo-fi-delay-pico-2.uf2`
 
-### ComputerCard-Style A/B Spike Build
-
-- `LFD_ENABLE_CCARD_SPIKE=ON` (default): unified ADC DMA round-robin path.
-- `LFD_ENABLE_CCARD_SPIKE=OFF`: baseline split ADC path.
-
 ```bash
 cmake -S . -B build -DPICO_BOARD=pico2 -DPICO_PLATFORM=rp2350-arm-s
 cmake --build build
-```
-
-To force baseline A/B mode:
-
-```bash
-cmake -S . -B build-off -DPICO_BOARD=pico2 -DPICO_PLATFORM=rp2350-arm-s -DLFD_ENABLE_CCARD_SPIKE=OFF
-cmake --build build-off
 ```
 
 ## Flash
@@ -151,17 +138,16 @@ Useful constants for sound/behavior tuning:
 
 DMA input specifics:
 
-- ADC DMA ring size: `64` samples
-- Output tap averaging: `4` samples
-- Post-resume discard: `1` sample
+- Unified ADC DMA ring size: `256` samples
+- Audio averaging taps: `4` samples
+- Pot settle discard after mux switch: `6` samples
 
 ## Repository Structure
 
 - `main.cpp`: entrypoint
 - `src/delay_app.h/.cpp`: UI, controls, LEDs, parameter mapping, app loop
 - `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line
-- `src/audio_input_dma.h/.cpp`: ADC DMA capture path
-- `src/unified_adc_dma.h/.cpp`: spike-mode unified ADC DMA (audio + pot-mux scheduler)
+- `src/unified_adc_dma.h/.cpp`: unified ADC DMA (audio + pot-mux scheduler)
 - `src/fast_dac_out.h/.cpp`: fast SPI DAC writes and output coupling setup
 - `brain-sdk/`: Brain SDK submodule
 
