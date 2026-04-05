@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_NAME="lo-fi-delay"
+SPIKE_MODE="${LFD_ENABLE_CCARD_SPIKE:-ON}"
 
 build_target() {
 	local board="$1"
@@ -11,8 +12,11 @@ build_target() {
 	local build_dir="$3"
 	local output_file="$4"
 
-	echo "Configuring ${board} (${platform})..."
-	cmake -S "$ROOT_DIR" -B "$ROOT_DIR/$build_dir" -DPICO_BOARD="$board" -DPICO_PLATFORM="$platform"
+	echo "Configuring ${board} (${platform}) with LFD_ENABLE_CCARD_SPIKE=${SPIKE_MODE}..."
+	cmake -S "$ROOT_DIR" -B "$ROOT_DIR/$build_dir" \
+		-DPICO_BOARD="$board" \
+		-DPICO_PLATFORM="$platform" \
+		-DLFD_ENABLE_CCARD_SPIKE="$SPIKE_MODE"
 
 	echo "Building ${board} (${platform})..."
 	cmake --build "$ROOT_DIR/$build_dir"

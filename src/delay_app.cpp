@@ -1,7 +1,13 @@
 #include "delay_app.h"
 
+#ifndef LFD_ENABLE_CCARD_SPIKE
+#define LFD_ENABLE_CCARD_SPIKE 0
+#endif
+
+#if !LFD_ENABLE_CCARD_SPIKE
 #include <hardware/adc.h>
 #include <hardware/gpio.h>
+#endif
 #include <hardware/sync.h>
 #include <pico/stdlib.h>
 
@@ -65,12 +71,18 @@ bool DelayApp::init() {
 		stdio_init_all();
 	}
 
+#if LFD_ENABLE_CCARD_SPIKE
+	for (uint8_t i = 0; i < kPotCount; i++) {
+		pot_values_[i] = kPotMaxRaw / 2;
+	}
+#else
 	init_pots_hw();
 	for (uint8_t i = 0; i < kPotCount; i++) {
 		engine_.set_control_adc_lock(true);
 		pot_values_[i] = read_pot_raw_u8(i);
 		engine_.set_control_adc_lock(false);
 	}
+#endif
 
 	for (uint8_t i = 0; i < kPotCount; i++) {
 		stable_pot_values_[i] = pot_values_[i];
@@ -125,6 +137,20 @@ bool DelayApp::init() {
 		return false;
 	}
 
+#if LFD_ENABLE_CCARD_SPIKE
+	sleep_us(30000);
+	for (uint8_t i = 0; i < kPotCount; i++) {
+		pot_values_[i] = engine_.read_pot_raw_u8(i);
+		stable_pot_values_[i] = pot_values_[i];
+	}
+	smoothed_delay_ms_ = map_time_pot_to_ms(stable_pot_values_[0]);
+	smoothed_feedback_norm_ =
+		static_cast<float>(stable_pot_values_[1]) / static_cast<float>(kPotMaxRaw);
+	smoothed_mix_norm_ =
+		static_cast<float>(stable_pot_values_[2]) / static_cast<float>(kPotMaxRaw);
+	tap_pickup_pot_raw_ = pot_values_[0];
+#endif
+
 	if (kEnableLogging) {
 		printf("lo-fi-delay started (ISR @ ~%.1f Hz, max delay %lu samples)\n",
 			static_cast<double>(engine_.sample_rate_hz()),
@@ -178,7 +204,7 @@ void DelayApp::run() {
 
 			printf(
 				"delay=%.1fms fb=%.2f mix=%.2f p0=%u p1=%u p2=%u freeze=%d tap=%d over=%lu"
-				" ticks=%lu stale=%lu lock_ev=%lu lock_avg=%luus lock_max=%luus\n",
+				" ticks=%lu stale=%lu lock_ev=%lu lock_avg=%luus lock_max=%luus mux_sw=%lu mux_discard=%lu\n",
 				static_cast<double>(delay_ms),
 				static_cast<double>(fb),
 				static_cast<double>(mix),
@@ -192,7 +218,9 @@ void DelayApp::run() {
 				static_cast<unsigned long>(stats.adc_stale_sample_count),
 				static_cast<unsigned long>(stats.control_lock_events),
 				static_cast<unsigned long>(lock_avg_us),
-				static_cast<unsigned long>(stats.control_lock_max_us));
+				static_cast<unsigned long>(stats.control_lock_max_us),
+				static_cast<unsigned long>(stats.pot_mux_switch_count),
+				static_cast<unsigned long>(stats.pot_settle_discard_count));
 		}
 
 		sleep_us(200);
@@ -320,9 +348,13 @@ void DelayApp::update_control_params() {
 		last_pot_read_us_ = now_us;
 		const uint8_t pot_index = next_pot_index_;
 		const uint16_t old_raw = pot_values_[pot_index];
+#if LFD_ENABLE_CCARD_SPIKE
+		pot_values_[pot_index] = engine_.read_pot_raw_u8(pot_index);
+#else
 		engine_.set_control_adc_lock(true);
 		pot_values_[pot_index] = read_pot_raw_u8(pot_index);
 		engine_.set_control_adc_lock(false);
+#endif
 		const int32_t delta =
 			static_cast<int32_t>(pot_values_[pot_index]) - static_cast<int32_t>(old_raw);
 		const int32_t abs_delta = (delta < 0) ? -delta : delta;
@@ -415,6 +447,9 @@ uint32_t DelayApp::delay_ms_to_samples(float delay_ms) const {
 }
 
 void DelayApp::init_pots_hw() {
+#if LFD_ENABLE_CCARD_SPIKE
+	return;
+#else
 	adc_init();
 	adc_gpio_init(GPIO_BRAIN_POTMUX_ADC);
 
@@ -425,9 +460,14 @@ void DelayApp::init_pots_hw() {
 	gpio_init(GPIO_BRAIN_POTMUX_S1);
 	gpio_set_dir(GPIO_BRAIN_POTMUX_S1, GPIO_OUT);
 	gpio_put(GPIO_BRAIN_POTMUX_S1, 0);
+#endif
 }
 
 uint16_t DelayApp::read_pot_raw_u8(uint8_t pot_index) const {
+#if LFD_ENABLE_CCARD_SPIKE
+	(void) pot_index;
+	return 0;
+#else
 	constexpr uint8_t kAudioAdcChannel = 1;	// GPIO 27 / ADC1 (Audio/CV In A)
 	const uint8_t mux = static_cast<uint8_t>(pot_index & 0x03u);
 	gpio_put(GPIO_BRAIN_POTMUX_S0, mux & 0x01u);
@@ -446,6 +486,7 @@ uint16_t DelayApp::read_pot_raw_u8(uint8_t pot_index) const {
 
 	const uint16_t raw12 = static_cast<uint16_t>(sum / kPotReadAverageTaps);
 	return static_cast<uint16_t>((static_cast<uint32_t>(raw12) * kPotMaxRaw) / 4095u);
+#endif
 }
 
 }  // namespace firmware

@@ -6,6 +6,7 @@
 
 #include "audio_input_dma.h"
 #include "fast_dac_out.h"
+#include "unified_adc_dma.h"
 
 namespace firmware {
 
@@ -23,6 +24,8 @@ struct DelayStats {
 	uint32_t control_lock_events;
 	uint64_t control_lock_total_us;
 	uint32_t control_lock_max_us;
+	uint32_t pot_mux_switch_count;
+	uint32_t pot_settle_discard_count;
 	uint32_t overrun_count;
 };
 
@@ -54,6 +57,7 @@ class DelayEngine {
 	void set_params(const DelayParams& params);
 	DelayParams get_params() const;
 	void set_control_adc_lock(bool locked);
+	uint16_t read_pot_raw_u8(uint8_t pot_index) const;
 
 	uint32_t get_overrun_count() const;
 	DelayStats get_stats() const;
@@ -62,6 +66,7 @@ class DelayEngine {
 	private:
 	static bool timer_callback(repeating_timer* timer);
 	bool process_audio_tick();
+	int16_t process_sample(const DelayParams& params, int16_t input_sample, bool control_locked);
 
 	static DelayEngine* instance_;
 
@@ -91,6 +96,7 @@ class DelayEngine {
 	bool was_control_locked_;
 
 	AudioInputDma audio_input_dma_;
+	UnifiedAdcDma unified_adc_dma_;
 	int16_t delay_buffer_[kMaxDelaySamples];
 	uint32_t write_index_;
 	uint32_t current_delay_q16_;
