@@ -6,8 +6,6 @@
 #include <cstdlib>
 #include <cstdio>
 
-#include "brain-common/brain-common.h"
-
 namespace firmware {
 
 namespace {
@@ -26,13 +24,10 @@ float random_unit() {
 }  // namespace
 
 DelayApp::DelayApp() :
-	button_tap_clear_(BRAIN_BUTTON_1, 30, kButtonLongPressMs),
-	button_freeze_(BRAIN_BUTTON_2, 30, 500),
-	panel_leds_(brain::ui::LedMode::kPwm),
-	next_pot_index_(0),
+	brain_(),
 	smoothed_delay_ms_(450.0f),
-	last_pot_read_us_(0),
-	pot_active_until_us_(0),
+	smoothed_feedback_norm_(0.35f),
+	smoothed_mix_norm_(0.45f),
 	last_led_update_us_(0),
 	next_tempo_pulse_us_(0),
 	tempo_pulse_off_us_(0),
@@ -58,66 +53,54 @@ DelayApp::DelayApp() :
 }
 
 bool DelayApp::init() {
-	if (kEnableLogging) {
-		stdio_init_all();
-	}
+	stdio_init_all();
 
-	brain::ui::PotsConfig pot_cfg = brain::ui::create_default_config(3, 8);
-	pot_cfg.simple = false;
-	pot_cfg.samples_per_read = 3;
-	pot_cfg.settling_delay_us = 100;
-	pot_cfg.change_threshold = 2;
-	pots_.init(pot_cfg);
-	for (uint8_t i = 0; i < kPotCount; i++) {
-		engine_.set_control_adc_lock(true);
-		pot_values_[i] = pots_.get(i);
-		engine_.set_control_adc_lock(false);
-	}
+	const uint32_t now_us = time_us_32();
+	last_led_update_us_ = now_us;
+	srand(now_us);
 
 	for (uint8_t i = 0; i < kPotCount; i++) {
+		pot_values_[i] = kPotMaxRaw / 2;
 		stable_pot_values_[i] = pot_values_[i];
 	}
-	smoothed_delay_ms_ = map_time_pot_to_ms(stable_pot_values_[0]);
-	tap_pickup_pot_raw_ = pot_values_[0];
-	last_pot_read_us_ = time_us_32();
-	pot_active_until_us_ = last_pot_read_us_ + kPotActivityHoldUs;
-	last_led_update_us_ = last_pot_read_us_;
+	sync_smoothed_controls_from_stable_pots();
+	tap_pickup_pot_raw_ = stable_pot_values_[0];
 
-	button_tap_clear_.init(true);
-	button_freeze_.init(true);
-	button_led_.init();
-	panel_leds_.init(brain::ui::LedMode::kPwm);
-	panel_leds_.off_all();
-	srand(last_pot_read_us_);
-	for (uint8_t i = 0; i < kPanelLedCount; i++) {
-		led_phase_[i] = random_unit() * 6.2831853f;
-		led_rate_[i] = 0.35f + random_unit() * 1.2f;
-		led_target_[i] = 0.12f + random_unit() * 0.65f;
-		led_level_[i] = led_target_[i] * 0.5f;
-		led_next_target_us_[i] =
-			last_pot_read_us_ +
-			static_cast<uint32_t>(
-				static_cast<float>(kLedTargetMinHoldUs) +
-				(static_cast<float>(kLedTargetMaxHoldUs - kLedTargetMinHoldUs) * random_unit()));
+	if (!brain_init_succeeded(brain_.init_buttons(true))) {
+		return false;
 	}
-	next_tempo_pulse_us_ = time_us_32() + tempo_pulse_interval_us(smoothed_delay_ms_);
-	tempo_pulse_off_us_ = 0;
-	tempo_pulse_on_ = false;
-
-	if (kEnableTapTempo) {
-		button_tap_clear_.set_on_single_tap([this]() { this->on_tap_tempo(); });
+	if (!brain_init_succeeded(brain_.init_leds(LedMode::kPwm))) {
+		return false;
 	}
-	button_tap_clear_.set_on_long_press([this]() { this->on_clear_long_press(); });
+	brain_.leds.off_all();
+	brain_.leds.button_init();
+	brain_.leds.button_off();
+	init_led_animation(now_us);
+	wire_button_callbacks();
 
-	button_freeze_.set_on_press([this]() { this->on_freeze_press(); });
-	button_freeze_.set_on_release([this]() { this->on_freeze_release(); });
-
-	if (!engine_.init()) {
+	if (!engine_.init(brain_)) {
+		fprintf(stderr, "[delay] engine.init failed\n");
+		brain_.leds.on_all();
+		brain_.leds.button_on();
 		return false;
 	}
 	if (!engine_.start()) {
+		fprintf(stderr, "[delay] engine.start failed (AudioProcessor init path)\n");
+		brain_.leds.on_all();
+		brain_.leds.button_on();
 		return false;
 	}
+
+	sleep_us(30000);
+	read_all_pots();
+	for (uint8_t i = 0; i < kPotCount; i++) {
+		stable_pot_values_[i] = pot_values_[i];
+	}
+	sync_smoothed_controls_from_stable_pots();
+	tap_pickup_pot_raw_ = stable_pot_values_[0];
+	next_tempo_pulse_us_ = time_us_32() + tempo_pulse_interval_us(smoothed_delay_ms_);
+	tempo_pulse_off_us_ = 0;
+	tempo_pulse_on_ = false;
 
 	if (kEnableLogging) {
 		printf("lo-fi-delay started (ISR @ ~%.1f Hz, max delay %lu samples)\n",
@@ -134,15 +117,14 @@ bool DelayApp::init() {
 	return true;
 }
 
+// Main non-audio loop: UI polling, control updates, and LED updates.
 void DelayApp::run() {
 	uint32_t last_control_us = time_us_32();
 	uint32_t last_debug_us = last_control_us;
 
 	while (true) {
-		button_tap_clear_.update();
-		button_freeze_.update();
-		button_led_.update();
-		panel_leds_.update();
+		brain_.update_buttons();
+		brain_.update_leds();
 
 		const uint32_t now_us = time_us_32();
 
@@ -168,13 +150,10 @@ void DelayApp::run() {
 				static_cast<float>(params.feedback_q15) / static_cast<float>(DelayEngine::kQ15Max);
 			const float mix =
 				static_cast<float>(params.mix_q15) / static_cast<float>(DelayEngine::kQ15Max);
-			const uint32_t lock_avg_us = (stats.control_lock_events > 0)
-				? static_cast<uint32_t>(stats.control_lock_total_us / stats.control_lock_events)
-				: 0;
 
 			printf(
 				"delay=%.1fms fb=%.2f mix=%.2f p0=%u p1=%u p2=%u freeze=%d tap=%d over=%lu"
-				" ticks=%lu stale=%lu lock_ev=%lu lock_avg=%luus lock_max=%luus\n",
+				" ticks=%lu mux_sw=%lu mux_discard=%lu\n",
 				static_cast<double>(delay_ms),
 				static_cast<double>(fb),
 				static_cast<double>(mix),
@@ -185,10 +164,8 @@ void DelayApp::run() {
 				tap_time_active_ ? 1 : 0,
 				static_cast<unsigned long>(stats.overrun_count),
 				static_cast<unsigned long>(stats.audio_tick_count),
-				static_cast<unsigned long>(stats.adc_stale_sample_count),
-				static_cast<unsigned long>(stats.control_lock_events),
-				static_cast<unsigned long>(lock_avg_us),
-				static_cast<unsigned long>(stats.control_lock_max_us));
+				static_cast<unsigned long>(stats.pot_mux_switch_count),
+				static_cast<unsigned long>(stats.pot_settle_discard_count));
 		}
 
 		sleep_us(200);
@@ -196,10 +173,6 @@ void DelayApp::run() {
 }
 
 void DelayApp::on_tap_tempo() {
-	if (!kEnableTapTempo) {
-		return;
-	}
-
 	if (ignore_next_tap_) {
 		ignore_next_tap_ = false;
 		return;
@@ -229,6 +202,27 @@ void DelayApp::on_freeze_press() {
 
 void DelayApp::on_freeze_release() {
 	freeze_pressed_ = false;
+}
+
+void DelayApp::wire_button_callbacks() {
+	brain_.buttons.button_a.set_on_single_tap([this]() { this->on_tap_tempo(); });
+	brain_.buttons.button_a.set_on_long_press([this]() { this->on_clear_long_press(); });
+	brain_.buttons.button_b.set_on_press([this]() { this->on_freeze_press(); });
+	brain_.buttons.button_b.set_on_release([this]() { this->on_freeze_release(); });
+}
+
+void DelayApp::init_led_animation(uint32_t now_us) {
+	for (uint8_t i = 0; i < kPanelLedCount; i++) {
+		led_phase_[i] = random_unit() * 6.2831853f;
+		led_rate_[i] = 0.35f + random_unit() * 1.2f;
+		led_target_[i] = 0.12f + random_unit() * 0.65f;
+		led_level_[i] = led_target_[i] * 0.5f;
+		led_next_target_us_[i] =
+			now_us +
+			static_cast<uint32_t>(
+				static_cast<float>(kLedTargetMinHoldUs) +
+				(static_cast<float>(kLedTargetMaxHoldUs - kLedTargetMinHoldUs) * random_unit()));
+	}
 }
 
 void DelayApp::update_panel_leds(uint32_t now_us) {
@@ -269,12 +263,12 @@ void DelayApp::update_panel_leds(uint32_t now_us) {
 			const float perceptual = led_level_[i] * led_level_[i];
 			const uint8_t brightness =
 				static_cast<uint8_t>(clamp_value<int32_t>(static_cast<int32_t>(perceptual * 255.0f), 0, 255));
-			panel_leds_.set_brightness(i, brightness);
+			brain_.leds.set_brightness(i, brightness);
 		}
 	}
 
 	if (freeze_pressed_) {
-		button_led_.on();
+		brain_.leds.button_on();
 		return;
 	}
 
@@ -287,9 +281,9 @@ void DelayApp::update_panel_leds(uint32_t now_us) {
 		tempo_pulse_on_ = false;
 	}
 	if (tempo_pulse_on_) {
-		button_led_.on();
+		brain_.leds.button_on();
 	} else {
-		button_led_.off();
+		brain_.leds.button_off();
 	}
 }
 
@@ -300,28 +294,10 @@ uint32_t DelayApp::tempo_pulse_interval_us(float delay_ms) const {
 		interval_us, kTempoPulseMinIntervalUs, kTempoPulseMaxIntervalUs);
 }
 
+// Convert control state into smoothed DelayParams for the ISR.
 void DelayApp::update_control_params() {
-	const uint32_t now_us = time_us_32();
-	const int32_t active_remaining = static_cast<int32_t>(pot_active_until_us_ - now_us);
-	const bool pot_activity_active = (active_remaining > 0);
-	const uint32_t pot_read_interval =
-		pot_activity_active ? kPotReadIntervalActiveUs : kPotReadIntervalIdleUs;
-
-	if ((now_us - last_pot_read_us_) >= pot_read_interval) {
-		last_pot_read_us_ = now_us;
-		const uint8_t pot_index = next_pot_index_;
-		const uint16_t old_raw = pot_values_[pot_index];
-		engine_.set_control_adc_lock(true);
-		pot_values_[pot_index] = pots_.get(pot_index);
-		engine_.set_control_adc_lock(false);
-		const int32_t delta =
-			static_cast<int32_t>(pot_values_[pot_index]) - static_cast<int32_t>(old_raw);
-		const int32_t abs_delta = (delta < 0) ? -delta : delta;
-		if (abs_delta >= static_cast<int32_t>(kPotActivityDetectThreshold)) {
-			pot_active_until_us_ = now_us + kPotActivityHoldUs;
-		}
-		next_pot_index_ = static_cast<uint8_t>((next_pot_index_ + 1) % kPotCount);
-	}
+	// The engine ADC sampler already handles mux settle/averaging; here we only consume snapshots.
+	read_all_pots();
 
 	const auto apply_deadband = [](uint16_t incoming, uint16_t current, uint8_t deadband) -> uint16_t {
 		const int32_t delta = static_cast<int32_t>(incoming) - static_cast<int32_t>(current);
@@ -338,7 +314,7 @@ void DelayApp::update_control_params() {
 	stable_pot_values_[2] =
 		apply_deadband(pot_values_[2], stable_pot_values_[2], kPotDeadbandMix);
 
-	if (kEnableTapTempo && tap_time_active_) {
+	if (tap_time_active_) {
 		const int32_t delta =
 			static_cast<int32_t>(stable_pot_values_[0]) - static_cast<int32_t>(tap_pickup_pot_raw_);
 		const int32_t abs_delta = (delta < 0) ? -delta : delta;
@@ -348,7 +324,7 @@ void DelayApp::update_control_params() {
 	}
 
 	const float pot_delay_ms = map_time_pot_to_ms(stable_pot_values_[0]);
-	const float target_delay_ms = (kEnableTapTempo && tap_time_active_) ? tap_delay_ms_ : pot_delay_ms;
+	const float target_delay_ms = tap_time_active_ ? tap_delay_ms_ : pot_delay_ms;
 	smoothed_delay_ms_ += (target_delay_ms - smoothed_delay_ms_) * kDelaySmoothingAlpha;
 	if (fabsf(target_delay_ms - smoothed_delay_ms_) < 0.5f) {
 		smoothed_delay_ms_ = target_delay_ms;
@@ -357,17 +333,40 @@ void DelayApp::update_control_params() {
 	const float feedback_norm =
 		static_cast<float>(stable_pot_values_[1]) / static_cast<float>(kPotMaxRaw);
 	const float mix_norm = static_cast<float>(stable_pot_values_[2]) / static_cast<float>(kPotMaxRaw);
+	smoothed_feedback_norm_ += (feedback_norm - smoothed_feedback_norm_) * kFeedbackSmoothingAlpha;
+	smoothed_mix_norm_ += (mix_norm - smoothed_mix_norm_) * kMixSmoothingAlpha;
+	if (fabsf(feedback_norm - smoothed_feedback_norm_) < 0.004f) {
+		smoothed_feedback_norm_ = feedback_norm;
+	}
+	if (fabsf(mix_norm - smoothed_mix_norm_) < 0.004f) {
+		smoothed_mix_norm_ = mix_norm;
+	}
 
 	DelayParams params = engine_.get_params();
 	params.delay_samples = delay_ms_to_samples(smoothed_delay_ms_);
-	params.feedback_q15 = to_q15(feedback_norm);
+	params.feedback_q15 = to_q15(smoothed_feedback_norm_);
 	if (params.feedback_q15 > DelayEngine::kFeedbackMaxQ15) {
 		params.feedback_q15 = DelayEngine::kFeedbackMaxQ15;
 	}
-	params.mix_q15 = to_q15(mix_norm);
+	params.mix_q15 = to_q15(smoothed_mix_norm_);
 	params.tone_q15 = static_cast<int16_t>(0.22f * static_cast<float>(DelayEngine::kQ15Max));
 	params.freeze = freeze_pressed_;
 	engine_.set_params(params);
+}
+
+// Read current 8-bit pot snapshots from the engine ADC sampler.
+void DelayApp::read_all_pots() {
+	for (uint8_t i = 0; i < kPotCount; i++) {
+		pot_values_[i] = engine_.read_pot_raw_u8(i);
+	}
+}
+
+void DelayApp::sync_smoothed_controls_from_stable_pots() {
+	smoothed_delay_ms_ = map_time_pot_to_ms(stable_pot_values_[0]);
+	smoothed_feedback_norm_ =
+		static_cast<float>(stable_pot_values_[1]) / static_cast<float>(kPotMaxRaw);
+	smoothed_mix_norm_ =
+		static_cast<float>(stable_pot_values_[2]) / static_cast<float>(kPotMaxRaw);
 }
 
 float DelayApp::map_time_pot_to_ms(uint16_t raw) const {

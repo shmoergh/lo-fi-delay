@@ -12,7 +12,9 @@ build_target() {
 	local output_file="$4"
 
 	echo "Configuring ${board} (${platform})..."
-	cmake -S "$ROOT_DIR" -B "$ROOT_DIR/$build_dir" -DPICO_BOARD="$board" -DPICO_PLATFORM="$platform"
+	cmake -S "$ROOT_DIR" -B "$ROOT_DIR/$build_dir" \
+		-DPICO_BOARD="$board" \
+		-DPICO_PLATFORM="$platform"
 
 	echo "Building ${board} (${platform})..."
 	cmake --build "$ROOT_DIR/$build_dir"

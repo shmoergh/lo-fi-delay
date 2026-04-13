@@ -3,6 +3,7 @@
 Digital mono delay firmware for the Shmoergh Brain platform, optimized for stable interrupt-driven audio with DMA-based ADC input.
 
 Current release target: **Pico 2 only** (`rp2350-arm-s`).
+SDK baseline: **Brain SDK 2.0** (UI/control via `Brain` wrapper).
 
 ## What This Firmware Does
 
@@ -25,7 +26,7 @@ Current release target: **Pico 2 only** (`rp2350-arm-s`).
 - `Pot 2`: feedback amount, clamped to max `0.92`.
 - `Pot 3`: wet/dry mix (`0.0` dry to `1.0` wet).
 - `Button A` short taps: tap tempo.
-- `Button A` long press (`~700 ms`): clear delay buffer.
+- `Button A` long press (`~500 ms`): clear delay buffer.
 - `Button B` hold: freeze delay write path (loop hold); release resumes normal recording.
 
 Tap tempo uses pickup behavior:
@@ -48,14 +49,13 @@ Tap tempo uses pickup behavior:
 
 ### Input Path
 
-- ADC input is captured by DMA (`AudioInputDma`) into a ring buffer.
-- ISR reads latest DMA sample (`latest_raw_u12()`), not direct ADC conversion.
-- Control reads (pots) temporarily lock/pause DMA safely, then resume with a short settle strategy.
+- One ADC+DMA sampler round-robins ADC0 (pot mux) and ADC1 (audio input) continuously.
+- ISR reads the latest smoothed audio sample from that stream.
+- Pot mux switching, settle discard, and pot averaging are handled inside the engine ADC section.
 
 ### DSP Path (ISR)
 
 - Convert ADC raw -> centered signed audio sample.
-- Apply control-lock handoff blend to reduce release artifacts.
 - Apply 1-pole DC blocker (always on).
 - Apply short input averaging (always on).
 - Interpolated delay read (fractional delay using Q16 interpolation).
@@ -93,6 +93,11 @@ Tap tempo uses pickup behavior:
 This builds the Pico 2 target and copies UF2 artifact to repo root:
 
 - `lo-fi-delay-pico-2.uf2`
+
+```bash
+cmake -S . -B build -DPICO_BOARD=pico2 -DPICO_PLATFORM=rp2350-arm-s
+cmake --build build
+```
 
 ## Flash
 
@@ -132,17 +137,15 @@ Useful constants for sound/behavior tuning:
 
 DMA input specifics:
 
-- ADC DMA ring size: `64` samples
-- Output tap averaging: `4` samples
-- Post-resume discard: `1` sample
+- ADC DMA ring size: `256` samples
+- Audio averaging taps: `4` samples
+- Pot settle discard after mux switch: `6` samples
 
 ## Repository Structure
 
 - `main.cpp`: entrypoint
 - `src/delay_app.h/.cpp`: UI, controls, LEDs, parameter mapping, app loop
-- `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line
-- `src/audio_input_dma.h/.cpp`: ADC DMA capture path
-- `src/fast_dac_out.h/.cpp`: fast SPI DAC writes and output coupling setup
+- `src/delay_engine.h/.cpp`: ISR audio engine + DSP + delay line + ADC/DMA + DAC path
 - `brain-sdk/`: Brain SDK submodule
 
 ## Known Scope and Limitations (Current Release)
@@ -158,7 +161,8 @@ DMA input specifics:
 
 ```bash
 cd brain-sdk
-git pull origin main
+git checkout 2.0
+git pull origin 2.0
 cd ..
 git add brain-sdk
 git commit -m "Update brain-sdk"
