@@ -97,29 +97,14 @@ bool DelayEngine::start() {
 
 	AudioProcessorConfig config{};
 	config.sample_period_us = static_cast<uint32_t>(kAudioPeriodUs);
-	config.enable_pot_mux = true;
-	config.pot_count = kAdcPotCount;
-	config.pot_settle_discard_samples = kAdcPotDiscardAfterSwitch;
-	config.pot_average_samples = kAdcPotSamplesPerHold;
-	config.max_dma_drain_samples_per_tick = kAdcMaxDmaDrainPerTick;
 
 	if (try_start_audio_processor(config)) {
 		running_ = true;
 		return true;
 	}
 
-	// Fallback profile: lighter pot processing to reduce ISR load during bring-up.
-	AudioProcessorConfig fallback = config;
-	fallback.pot_settle_discard_samples = 2;
-	fallback.pot_average_samples = 16;
-	fallback.max_dma_drain_samples_per_tick = 64;
-	if (try_start_audio_processor(fallback)) {
-		running_ = true;
-		return true;
-	}
-
-	// Final fallback: slightly longer tick while keeping topology identical.
-	AudioProcessorConfig fallback_slow = fallback;
+	// Fallback: slightly longer tick to reduce ISR load if the primary period fails.
+	AudioProcessorConfig fallback_slow = config;
 	fallback_slow.sample_period_us = 50;
 	if (try_start_audio_processor(fallback_slow)) {
 		running_ = true;
@@ -210,12 +195,8 @@ bool DelayEngine::try_start_audio_processor(const AudioProcessorConfig& config) 
 	// from low-level AudioProcessor initialization failures.
 	fprintf(
 		stderr,
-		"[delay] brain.init_audio_processor failed (period=%lu, pots=%u, discard=%u, avg=%u, drain=%u). Retrying direct init.\n",
-		static_cast<unsigned long>(config.sample_period_us),
-		static_cast<unsigned>(config.pot_count),
-		static_cast<unsigned>(config.pot_settle_discard_samples),
-		static_cast<unsigned>(config.pot_average_samples),
-		static_cast<unsigned>(config.max_dma_drain_samples_per_tick));
+		"[delay] brain.init_audio_processor failed (period=%lu). Retrying direct init.\n",
+		static_cast<unsigned long>(config.sample_period_us));
 
 	const BrainInitStatus direct_status =
 		brain_->audio_processor.init(config, &DelayEngine::audio_callback, this);

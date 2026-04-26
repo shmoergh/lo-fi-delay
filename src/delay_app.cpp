@@ -78,6 +78,13 @@ bool DelayApp::init() {
 	init_led_animation(now_us);
 	wire_button_callbacks();
 
+	PotsConfig pots_cfg = create_default_pots_config(kPotCount, 8);
+	pots_cfg.samples_per_read = kPotSamplesPerRead;
+	pots_cfg.settle_discard_samples = kPotSettleDiscardSamples;
+	if (!brain_init_succeeded(brain_.init_pots(pots_cfg))) {
+		return false;
+	}
+
 	if (!engine_.init(brain_)) {
 		fprintf(stderr, "[delay] engine.init failed\n");
 		brain_.leds.on_all();

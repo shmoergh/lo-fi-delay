@@ -42,6 +42,7 @@ target_include_directories(lo-fi-delay PRIVATE
 target_compile_definitions(lo-fi-delay PRIVATE
 	BRAIN_USE_LEDS=1
 	BRAIN_USE_BUTTONS=1
+	BRAIN_USE_POTS=1
 	BRAIN_USE_AUDIO_PROCESSOR=1
 )
 

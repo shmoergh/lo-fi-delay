@@ -75,12 +75,8 @@ private:
 	uint32_t current_delay_q16_;
 	int32_t tone_lp_q15_;
 
-	// AudioProcessor tuning for unified ADC/DMA schedule.
 	static const uint8_t kAdcPotCount = 3;
 	static const uint16_t kAdcPotMaxRaw = 255;
-	static const uint8_t kAdcPotSamplesPerHold = 64;
-	static const uint8_t kAdcPotDiscardAfterSwitch = 6;
-	static const uint16_t kAdcMaxDmaDrainPerTick = 16;
 };
 
 }  // namespace firmware
