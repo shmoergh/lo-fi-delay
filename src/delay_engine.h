@@ -30,7 +30,10 @@ public:
 	};
 
 	static const int kAudioPeriodUs = 42;
-	static const uint32_t kMaxDelaySamples = 24000;
+	// Power of two so the ring buffer index uses a bitmask instead of a divide.
+	static const uint32_t kMaxDelaySamples = 32768;
+	static const uint32_t kDelayIndexMask = kMaxDelaySamples - 1;
+	static const uint32_t kAudioSpiBaudHz = 4000000;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
 	static const uint32_t kDelaySlewQ16PerSample = (1u << 12);

@@ -97,6 +97,7 @@ bool DelayEngine::start() {
 
 	AudioProcessorConfig config{};
 	config.sample_period_us = static_cast<uint32_t>(kAudioPeriodUs);
+	config.spi_baud_hz = kAudioSpiBaudHz;
 
 	if (try_start_audio_processor(config)) {
 		running_ = true;
@@ -273,20 +274,19 @@ int16_t DelayEngine::process_delay_sample(
 	const uint32_t delay_int = clamp_value<uint32_t>(current_delay_q16_ >> 16, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 
-	const uint32_t read_index_a = (write_index_ + kMaxDelaySamples - delay_int) % kMaxDelaySamples;
-	const uint32_t read_index_b =
-		(write_index_ + kMaxDelaySamples - (delay_int + 1)) % kMaxDelaySamples;
+	const uint32_t read_index_a = (write_index_ - delay_int) & kDelayIndexMask;
+	const uint32_t read_index_b = (read_index_a - 1u) & kDelayIndexMask;
 
 	const int32_t delayed_a = delay_buffer_[read_index_a];
 	const int32_t delayed_b = delay_buffer_[read_index_b];
-	const int32_t delayed_interp = static_cast<int32_t>(
-		((static_cast<int64_t>(delayed_a) * static_cast<int64_t>(65536u - frac_q16)) +
-			(static_cast<int64_t>(delayed_b) * static_cast<int64_t>(frac_q16))) >>
-		16);
-	int16_t delayed_sample = clamp_i16(delayed_interp);
+	// Linear interp fits int32: |a*(1<<16-f) + b*f| <= max(|a|,|b|) * (1<<16) <= INT32_MAX.
+	const int32_t one_minus_frac = static_cast<int32_t>(65536u - frac_q16);
+	const int32_t delayed_interp =
+		(delayed_a * one_minus_frac + delayed_b * static_cast<int32_t>(frac_q16)) >> 16;
+	int16_t delayed_sample = static_cast<int16_t>(delayed_interp);
 	if (delay_slewing) {
-		delayed_sample = clamp_i16(
-			(static_cast<int32_t>(delayed_sample) + static_cast<int32_t>(prev_delayed_sample_)) / 2);
+		delayed_sample = static_cast<int16_t>(
+			(static_cast<int32_t>(delayed_sample) + static_cast<int32_t>(prev_delayed_sample_)) >> 1);
 	}
 	prev_delayed_sample_ = delayed_sample;
 
@@ -307,10 +307,7 @@ int16_t DelayEngine::process_delay_sample(
 	}
 
 	delay_buffer_[write_index_] = write_sample;
-	write_index_++;
-	if (write_index_ >= kMaxDelaySamples) {
-		write_index_ = 0;
-	}
+	write_index_ = (write_index_ + 1u) & kDelayIndexMask;
 
 	const int32_t dry_part =
 		(static_cast<int32_t>(input_sample) * static_cast<int32_t>(kQ15Max - params.mix_q15)) >> 15;
