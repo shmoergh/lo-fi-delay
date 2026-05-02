@@ -9,3 +9,4 @@ build-pico-2
 **/ai
 .vscode/
 wd-*
+.cache/

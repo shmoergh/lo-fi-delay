@@ -16,6 +16,8 @@ class DelayApp {
 
 	private:
 	static const uint8_t kPotCount = 3;
+	static const uint8_t kPotSamplesPerRead = 64;
+	static const uint8_t kPotSettleDiscardSamples = 6;
 	static const uint32_t kControlIntervalUs = 20000;
 	static const uint32_t kDebugIntervalUs = 300000;
 	static const bool kEnableLogging = false;

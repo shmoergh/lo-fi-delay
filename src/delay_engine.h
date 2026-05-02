@@ -30,7 +30,10 @@ public:
 	};
 
 	static const int kAudioPeriodUs = 42;
-	static const uint32_t kMaxDelaySamples = 24000;
+	// Power of two so the ring buffer index uses a bitmask instead of a divide.
+	static const uint32_t kMaxDelaySamples = 32768;
+	static const uint32_t kDelayIndexMask = kMaxDelaySamples - 1;
+	static const uint32_t kAudioSpiBaudHz = 4000000;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
 	static const uint32_t kDelaySlewQ16PerSample = (1u << 12);
@@ -75,12 +78,8 @@ private:
 	uint32_t current_delay_q16_;
 	int32_t tone_lp_q15_;
 
-	// AudioProcessor tuning for unified ADC/DMA schedule.
 	static const uint8_t kAdcPotCount = 3;
 	static const uint16_t kAdcPotMaxRaw = 255;
-	static const uint8_t kAdcPotSamplesPerHold = 64;
-	static const uint8_t kAdcPotDiscardAfterSwitch = 6;
-	static const uint16_t kAdcMaxDmaDrainPerTick = 16;
 };
 
 }  // namespace firmware
