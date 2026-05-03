@@ -63,7 +63,6 @@ DelayEngine::DelayEngine() :
 	dc_block_x_prev_(0),
 	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
-	prev_delayed_sample_(0),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
 	tone_lp_q15_(0) {
@@ -97,7 +96,10 @@ bool DelayEngine::start() {
 
 	AudioProcessorConfig config{};
 	config.sample_period_us = static_cast<uint32_t>(kAudioPeriodUs);
-	config.spi_baud_hz = kAudioSpiBaudHz;
+	config.enable_pot_mux = true;
+	config.pot_count = kAdcPotCount;
+	config.pot_settle_discard_samples = kAdcPotDiscardAfterSwitch;
+	config.pot_average_samples = kAdcPotSamplesPerHold;
 
 	if (try_start_audio_processor(config)) {
 		running_ = true;
@@ -135,7 +137,6 @@ void DelayEngine::clear_and_restart() {
 	dc_block_x_prev_ = 0;
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
-	prev_delayed_sample_ = 0;
 	restore_interrupts(irq_state);
 }
 
@@ -242,7 +243,6 @@ int16_t DelayEngine::process_audio_sample(int16_t input_sample, const AudioProce
 		const uint32_t step = (delta > kDelaySlewQ16PerSample) ? kDelaySlewQ16PerSample : delta;
 		current_delay_q16_ -= step;
 	}
-	const bool delay_slewing = (current_delay_q16_ != target_delay_q16);
 
 	input_sample = normalize_audio_input_sample(input_sample);
 
@@ -264,13 +264,12 @@ int16_t DelayEngine::process_audio_sample(int16_t input_sample, const AudioProce
 		return input_sample;
 	}
 
-	return process_delay_sample(params, input_sample, delay_slewing);
+	return process_delay_sample(params, input_sample);
 }
 
 int16_t DelayEngine::process_delay_sample(
 	const DelayParams& params,
-	int16_t input_sample,
-	bool delay_slewing) {
+	int16_t input_sample) {
 	const uint32_t delay_int = clamp_value<uint32_t>(current_delay_q16_ >> 16, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 
@@ -283,12 +282,9 @@ int16_t DelayEngine::process_delay_sample(
 	const int32_t one_minus_frac = static_cast<int32_t>(65536u - frac_q16);
 	const int32_t delayed_interp =
 		(delayed_a * one_minus_frac + delayed_b * static_cast<int32_t>(frac_q16)) >> 16;
+	// The fractional linear interp above already handles delay_int transitions
+	// continuously, so no extra averaging is needed when slewing.
 	int16_t delayed_sample = static_cast<int16_t>(delayed_interp);
-	if (delay_slewing) {
-		delayed_sample = static_cast<int16_t>(
-			(static_cast<int32_t>(delayed_sample) + static_cast<int32_t>(prev_delayed_sample_)) >> 1);
-	}
-	prev_delayed_sample_ = delayed_sample;
 
 	const int32_t tone_lp = tone_lp_q15_ +
 		((static_cast<int32_t>(params.tone_q15) *
