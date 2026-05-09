@@ -29,8 +29,11 @@ public:
 		kDryPass = 2
 	};
 
-	static const int kAudioPeriodUs = 42;
-	static const uint32_t kMaxDelaySamples = 24000;
+	static const int kAudioPeriodUs = 23;
+	// Power of two so the ring buffer index uses a bitmask instead of a divide.
+	// 65536 samples * 23 us = ~1.5 s of headroom for the 1000 ms max delay.
+	static const uint32_t kMaxDelaySamples = 65536;
+	static const uint32_t kDelayIndexMask = kMaxDelaySamples - 1;
 	static const int16_t kQ15Max = 32767;
 	static const int16_t kFeedbackMaxQ15 = 30145;
 	static const uint32_t kDelaySlewQ16PerSample = (1u << 12);
@@ -58,7 +61,7 @@ private:
 		const AudioProcessorFrame* frame,
 		void* user_ctx);
 	int16_t process_audio_sample(int16_t input_sample, const AudioProcessorFrame* frame);
-	int16_t process_delay_sample(const DelayParams& params, int16_t input_sample, bool delay_slewing);
+	int16_t process_delay_sample(const DelayParams& params, int16_t input_sample);
 
 	Brain* brain_;
 	bool initialized_;
@@ -68,19 +71,17 @@ private:
 	int16_t dc_block_x_prev_;
 	int32_t dc_block_y_prev_;
 	int16_t prev_input_raw_sample_;
-	int16_t prev_delayed_sample_;
 
 	int16_t delay_buffer_[kMaxDelaySamples];
 	uint32_t write_index_;
 	uint32_t current_delay_q16_;
 	int32_t tone_lp_q15_;
 
-	// AudioProcessor tuning for unified ADC/DMA schedule.
+	// AudioProcessor pot scanning tuning (consumed by the AudioProcessorConfig in start()).
 	static const uint8_t kAdcPotCount = 3;
 	static const uint16_t kAdcPotMaxRaw = 255;
-	static const uint8_t kAdcPotSamplesPerHold = 64;
-	static const uint8_t kAdcPotDiscardAfterSwitch = 6;
-	static const uint16_t kAdcMaxDmaDrainPerTick = 16;
+	static const uint8_t kAdcPotSamplesPerHold = 4;
+	static const uint8_t kAdcPotDiscardAfterSwitch = 2;
 };
 
 }  // namespace firmware

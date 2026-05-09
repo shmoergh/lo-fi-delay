@@ -63,7 +63,6 @@ DelayEngine::DelayEngine() :
 	dc_block_x_prev_(0),
 	dc_block_y_prev_(0),
 	prev_input_raw_sample_(0),
-	prev_delayed_sample_(0),
 	write_index_(0),
 	current_delay_q16_(1u << 16),
 	tone_lp_q15_(0) {
@@ -101,25 +100,14 @@ bool DelayEngine::start() {
 	config.pot_count = kAdcPotCount;
 	config.pot_settle_discard_samples = kAdcPotDiscardAfterSwitch;
 	config.pot_average_samples = kAdcPotSamplesPerHold;
-	config.max_dma_drain_samples_per_tick = kAdcMaxDmaDrainPerTick;
 
 	if (try_start_audio_processor(config)) {
 		running_ = true;
 		return true;
 	}
 
-	// Fallback profile: lighter pot processing to reduce ISR load during bring-up.
-	AudioProcessorConfig fallback = config;
-	fallback.pot_settle_discard_samples = 2;
-	fallback.pot_average_samples = 16;
-	fallback.max_dma_drain_samples_per_tick = 64;
-	if (try_start_audio_processor(fallback)) {
-		running_ = true;
-		return true;
-	}
-
-	// Final fallback: slightly longer tick while keeping topology identical.
-	AudioProcessorConfig fallback_slow = fallback;
+	// Fallback: slightly longer tick to reduce ISR load if the primary period fails.
+	AudioProcessorConfig fallback_slow = config;
 	fallback_slow.sample_period_us = 50;
 	if (try_start_audio_processor(fallback_slow)) {
 		running_ = true;
@@ -149,7 +137,6 @@ void DelayEngine::clear_and_restart() {
 	dc_block_x_prev_ = 0;
 	dc_block_y_prev_ = 0;
 	prev_input_raw_sample_ = 0;
-	prev_delayed_sample_ = 0;
 	restore_interrupts(irq_state);
 }
 
@@ -210,12 +197,8 @@ bool DelayEngine::try_start_audio_processor(const AudioProcessorConfig& config) 
 	// from low-level AudioProcessor initialization failures.
 	fprintf(
 		stderr,
-		"[delay] brain.init_audio_processor failed (period=%lu, pots=%u, discard=%u, avg=%u, drain=%u). Retrying direct init.\n",
-		static_cast<unsigned long>(config.sample_period_us),
-		static_cast<unsigned>(config.pot_count),
-		static_cast<unsigned>(config.pot_settle_discard_samples),
-		static_cast<unsigned>(config.pot_average_samples),
-		static_cast<unsigned>(config.max_dma_drain_samples_per_tick));
+		"[delay] brain.init_audio_processor failed (period=%lu). Retrying direct init.\n",
+		static_cast<unsigned long>(config.sample_period_us));
 
 	const BrainInitStatus direct_status =
 		brain_->audio_processor.init(config, &DelayEngine::audio_callback, this);
@@ -260,7 +243,6 @@ int16_t DelayEngine::process_audio_sample(int16_t input_sample, const AudioProce
 		const uint32_t step = (delta > kDelaySlewQ16PerSample) ? kDelaySlewQ16PerSample : delta;
 		current_delay_q16_ -= step;
 	}
-	const bool delay_slewing = (current_delay_q16_ != target_delay_q16);
 
 	input_sample = normalize_audio_input_sample(input_sample);
 
@@ -282,32 +264,27 @@ int16_t DelayEngine::process_audio_sample(int16_t input_sample, const AudioProce
 		return input_sample;
 	}
 
-	return process_delay_sample(params, input_sample, delay_slewing);
+	return process_delay_sample(params, input_sample);
 }
 
 int16_t DelayEngine::process_delay_sample(
 	const DelayParams& params,
-	int16_t input_sample,
-	bool delay_slewing) {
+	int16_t input_sample) {
 	const uint32_t delay_int = clamp_value<uint32_t>(current_delay_q16_ >> 16, 1, kMaxDelaySamples - 2);
 	const uint32_t frac_q16 = current_delay_q16_ & 0xFFFFu;
 
-	const uint32_t read_index_a = (write_index_ + kMaxDelaySamples - delay_int) % kMaxDelaySamples;
-	const uint32_t read_index_b =
-		(write_index_ + kMaxDelaySamples - (delay_int + 1)) % kMaxDelaySamples;
+	const uint32_t read_index_a = (write_index_ - delay_int) & kDelayIndexMask;
+	const uint32_t read_index_b = (read_index_a - 1u) & kDelayIndexMask;
 
 	const int32_t delayed_a = delay_buffer_[read_index_a];
 	const int32_t delayed_b = delay_buffer_[read_index_b];
-	const int32_t delayed_interp = static_cast<int32_t>(
-		((static_cast<int64_t>(delayed_a) * static_cast<int64_t>(65536u - frac_q16)) +
-			(static_cast<int64_t>(delayed_b) * static_cast<int64_t>(frac_q16))) >>
-		16);
-	int16_t delayed_sample = clamp_i16(delayed_interp);
-	if (delay_slewing) {
-		delayed_sample = clamp_i16(
-			(static_cast<int32_t>(delayed_sample) + static_cast<int32_t>(prev_delayed_sample_)) / 2);
-	}
-	prev_delayed_sample_ = delayed_sample;
+	// Linear interp fits int32: |a*(1<<16-f) + b*f| <= max(|a|,|b|) * (1<<16) <= INT32_MAX.
+	const int32_t one_minus_frac = static_cast<int32_t>(65536u - frac_q16);
+	const int32_t delayed_interp =
+		(delayed_a * one_minus_frac + delayed_b * static_cast<int32_t>(frac_q16)) >> 16;
+	// The fractional linear interp above already handles delay_int transitions
+	// continuously, so no extra averaging is needed when slewing.
+	int16_t delayed_sample = static_cast<int16_t>(delayed_interp);
 
 	const int32_t tone_lp = tone_lp_q15_ +
 		((static_cast<int32_t>(params.tone_q15) *
@@ -326,10 +303,7 @@ int16_t DelayEngine::process_delay_sample(
 	}
 
 	delay_buffer_[write_index_] = write_sample;
-	write_index_++;
-	if (write_index_ >= kMaxDelaySamples) {
-		write_index_ = 0;
-	}
+	write_index_ = (write_index_ + 1u) & kDelayIndexMask;
 
 	const int32_t dry_part =
 		(static_cast<int32_t>(input_sample) * static_cast<int32_t>(kQ15Max - params.mix_q15)) >> 15;
